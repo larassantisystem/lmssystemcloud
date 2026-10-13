@@ -1,0 +1,334 @@
+@import "tailwindcss";
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm 8mm 10mm;
+  }
+
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+
+  html, body {
+    background: white !important;
+    color: black !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 100% !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: optimizeLegibility !important;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  }
+
+  /* Sembunyikan elemen no-print secara mutlak dari layout */
+  .no-print,
+  .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* Sembunyikan seluruh root aplikasi saat mencetak laporan atau label dari modal */
+  body.printing-report #root,
+  body.printing-label #root {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Sembunyikan elemen latar secara default sebagai perlindungan tambahan */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Netralkan modal portal langsung di bawah body */
+  body > .fixed,
+  body > [class*="fixed"],
+  body.printing-report > .fixed,
+  body.printing-report > [class*="fixed"],
+  body.printing-label > .fixed,
+  body.printing-label > [class*="fixed"],
+  .overflow-y-auto,
+  [class*="overflow-"] {
+    position: static !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    max-width: none !important;
+    width: 100% !important;
+    inset: auto !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Tampilkan kontainer cetak resmi secara utuh */
+  #quarantine-label-printable,
+  #quarantine-label-printable *,
+  #qc-status-label-printable,
+  #qc-status-label-printable *,
+  #printable-qc-report,
+  #printable-qc-report *,
+  #printable-ipc-report,
+  #printable-ipc-report *,
+  #ipc-labels-printable,
+  #ipc-labels-printable * {
+    visibility: visible !important;
+  }
+
+  #printable-qc-report,
+  #printable-ipc-report {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: geometricPrecision !important;
+  }
+
+  #quarantine-label-printable,
+  #qc-status-label-printable,
+  #ipc-labels-printable {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    position: static !important;
+    width: 100mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  .print-page-wrapper {
+    display: block !important;
+    width: 100mm !important;
+    height: 100mm !important;
+    min-width: 100mm !important;
+    min-height: 100mm !important;
+    max-width: 100mm !important;
+    max-height: 100mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    page-break-before: auto !important;
+    break-before: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  .print-page-wrapper:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  .thermal-label-page,
+  .ipc-label-card {
+    width: 100mm !important;
+    height: 100mm !important;
+    min-width: 100mm !important;
+    min-height: 100mm !important;
+    max-width: 100mm !important;
+    max-height: 100mm !important;
+    margin: 0 !important;
+    padding: 3mm !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    overflow: hidden !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: geometricPrecision !important;
+    shape-rendering: geometricPrecision !important;
+    image-rendering: -webkit-optimize-contrast !important;
+    image-rendering: crisp-edges !important;
+  }
+
+  /* Hilangkan dithering / bayangan abu-abu (halftoning) pada head printer thermal 1-bit solid black */
+  .thermal-label-page *,
+  .ipc-label-card *,
+  #qc-status-label-printable *,
+  #quarantine-label-printable *,
+  #ipc-labels-printable * {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    opacity: 1 !important;
+    border-color: #000000 !important;
+    text-rendering: geometricPrecision !important;
+    shape-rendering: geometricPrecision !important;
+  }
+
+  /* PENGECUALIAN KRUSIAL: Proteksi teks putih pada latar banner hitam agar tidak tertutup */
+  .thermal-label-page .bg-black,
+  .thermal-label-page [class*="bg-black"],
+  .ipc-label-card .bg-black,
+  #qc-status-label-printable .bg-black,
+  #quarantine-label-printable .bg-black {
+    background-color: #000000 !important;
+    background: #000000 !important;
+  }
+
+  .thermal-label-page .text-white,
+  .thermal-label-page .bg-black,
+  .thermal-label-page .bg-black *,
+  .thermal-label-page [class*="bg-black"] *,
+  .ipc-label-card .text-white,
+  .ipc-label-card .bg-black,
+  .ipc-label-card .bg-black *,
+  #qc-status-label-printable .bg-black *,
+  #quarantine-label-printable .bg-black *,
+  #ipc-labels-printable .bg-black * {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+  }
+
+  /* PENGECUALIAN SPESIFIK: Badge / Lencana berlatar terang di dalam banner hitam (Kode Material, Jenis Material, dll) HARUS teks hitam berlatar putih */
+  .thermal-label-page .bg-black .bg-white,
+  .thermal-label-page .bg-black .bg-white *,
+  .thermal-label-page .bg-black [class*="bg-white"],
+  .thermal-label-page .bg-black [class*="bg-white"] *,
+  .thermal-label-page .bg-black [class*="bg-[#FEF08A]"],
+  .thermal-label-page .bg-black [class*="bg-[#FEF08A]"] *,
+  .thermal-label-page .bg-black .text-black,
+  .thermal-label-page .bg-black .text-black *,
+  #qc-status-label-printable .bg-black .bg-white,
+  #qc-status-label-printable .bg-black .bg-white *,
+  #qc-status-label-printable .bg-black [class*="bg-white"],
+  #qc-status-label-printable .bg-black [class*="bg-white"] *,
+  #qc-status-label-printable .bg-black [class*="bg-[#FEF08A]"],
+  #qc-status-label-printable .bg-black [class*="bg-[#FEF08A]"] *,
+  #qc-status-label-printable .bg-black .text-black,
+  #qc-status-label-printable .bg-black .text-black *,
+  #quarantine-label-printable .bg-black .bg-white,
+  #quarantine-label-printable .bg-black .bg-white *,
+  #quarantine-label-printable .bg-black [class*="bg-white"],
+  #quarantine-label-printable .bg-black [class*="bg-white"] *,
+  #quarantine-label-printable .bg-black [class*="bg-[#FEF08A]"],
+  #quarantine-label-printable .bg-black [class*="bg-[#FEF08A]"] *,
+  #quarantine-label-printable .bg-black .text-black,
+  #quarantine-label-printable .bg-black .text-black *,
+  #ipc-labels-printable .bg-black .bg-white,
+  #ipc-labels-printable .bg-black .bg-white *,
+  #ipc-labels-printable .bg-black [class*="bg-white"],
+  #ipc-labels-printable .bg-black [class*="bg-white"] *,
+  #ipc-labels-printable .bg-black .text-black,
+  #ipc-labels-printable .bg-black .text-black * {
+    color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    border-color: #000000 !important;
+    font-weight: 900 !important;
+  }
+
+  body.printing-label {
+    width: 100mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .thermal-label-page img,
+  .ipc-label-card img,
+  #qc-status-label-printable img,
+  #quarantine-label-printable img,
+  #ipc-labels-printable img {
+    image-rendering: -webkit-optimize-contrast !important;
+    image-rendering: crisp-edges !important;
+    image-rendering: pixelated !important;
+    filter: none !important;
+  }
+
+  .print-page {
+    display: block !important;
+    position: relative !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: white !important;
+    page-break-before: auto !important;
+    break-before: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    overflow: visible !important;
+  }
+
+  .print-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  .page-break-inside-avoid,
+  .avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tbody {
+    display: table-row-group !important;
+  }
+
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Mode Compact (Fit to 1 Page) */
+  .compact-sheet {
+    font-size: 8pt !important;
+    line-height: 1.15 !important;
+  }
+
+  .compact-sheet th,
+  .compact-sheet td {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+  }
+}
+

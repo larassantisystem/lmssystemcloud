@@ -1,0 +1,10 @@
+{
+  "name": "PT. LMS-CLOUD ",
+  "description": "Sistem Perencanaan & Eksekusi Manufaktur Terintegrasi PT. LARASSANTI MAKMUR SEJAHTERA (RnD, PPIC, Warehouse, Quality, Sales, Procurement)",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
