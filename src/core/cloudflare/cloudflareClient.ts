@@ -26,34 +26,8 @@ class CloudflareD1Client {
    */
   async query<T = any>(sql: string, params: any[] = []): Promise<D1QueryResult<T>> {
     try {
-      const cfAccountId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_CLOUDFLARE_ACCOUNT_ID;
-      const cfDbId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_CLOUDFLARE_DATABASE_ID;
-      const cfToken = typeof import.meta !== 'undefined' && import.meta.env?.VITE_CLOUDFLARE_API_TOKEN;
-
-      // Direct Cloudflare D1 REST API query (for Vercel / external hosting)
-      if (cfAccountId && cfDbId && cfToken) {
-        const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${cfAccountId}/d1/database/${cfDbId}/query`;
-        const res = await fetch(cfUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${cfToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ sql, params }),
-        });
-        const cfData: any = await res.json();
-        if (!cfData.success) {
-          throw new Error(cfData.errors?.[0]?.message || 'Cloudflare D1 REST query failed');
-        }
-        const resultObj = cfData.result?.[0] || {};
-        return {
-          results: resultObj.results || [],
-          success: true,
-          meta: resultObj.meta,
-        };
-      }
-
-      // Default: local server proxy / Cloudflare Pages function
+      // All queries are routed via the server-side proxy (${this.apiBase}/d1/query)
+      // to avoid client-side browser CORS restrictions and securely handle credentials.
       let response: Response | null = null;
       let lastError: any = null;
 
@@ -359,10 +333,14 @@ class D1QueryBuilder {
       try {
         const inserted: any[] = [];
         for (const item of list) {
-          const keys = Object.keys(item);
+          const itemToInsert = { ...item };
+          if (!itemToInsert.id && this.table !== 'sqlite_sequence') {
+            itemToInsert.id = `id-${Date.now()}-${Math.random().toString(36).substr(2, 7)}`;
+          }
+          const keys = Object.keys(itemToInsert);
           const placeholders = keys.map(() => '?').join(', ');
           const vals = keys.map((k) => {
-            const val = item[k];
+            const val = itemToInsert[k];
             if (val && typeof val === 'object' && !(val instanceof Date)) {
               return JSON.stringify(val);
             }
@@ -371,7 +349,7 @@ class D1QueryBuilder {
 
           const sql = `INSERT INTO ${this.table} (${keys.join(', ')}) VALUES (${placeholders})`;
           await this.client.query(sql, vals);
-          inserted.push(item);
+          inserted.push(itemToInsert);
         }
         return { data: inserted, error: null };
       } catch (err: any) {
@@ -409,7 +387,11 @@ class D1QueryBuilder {
       try {
         const results: any[] = [];
         for (const item of list) {
-          const keys = Object.keys(item);
+          const itemToInsert = { ...item };
+          if (!itemToInsert.id && conflictCol !== 'id') {
+            itemToInsert.id = `id-${Date.now()}-${Math.random().toString(36).substr(2, 7)}`;
+          }
+          const keys = Object.keys(itemToInsert);
           const placeholders = keys.map(() => '?').join(', ');
           const updateSets = keys
             .filter((k) => k !== conflictCol)
@@ -417,7 +399,7 @@ class D1QueryBuilder {
             .join(', ');
 
           const vals = keys.map((k) => {
-            const val = item[k];
+            const val = itemToInsert[k];
             if (val && typeof val === 'object' && !(val instanceof Date)) {
               return JSON.stringify(val);
             }
@@ -430,7 +412,7 @@ class D1QueryBuilder {
             ON CONFLICT(${conflictCol}) DO UPDATE SET ${updateSets || `${conflictCol} = excluded.${conflictCol}`}
           `;
           await this.client.query(sql, vals);
-          results.push(item);
+          results.push(itemToInsert);
         }
         return { data: results, error: null };
       } catch (err: any) {
