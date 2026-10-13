@@ -1211,7 +1211,11 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error('[LMS DDMP] Fatal startup error:', err);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('[LMS DDMP] Fatal startup error:', err);
+    process.exit(1);
+  });
+}
+
+export default app;
