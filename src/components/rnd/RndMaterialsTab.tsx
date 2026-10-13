@@ -53,6 +53,36 @@ export const RAW_MATERIAL_CATEGORIES = [
   { id: 'other', label: 'Lain-lain', color: 'border-slate-300 bg-slate-100 text-slate-800', badge: 'bg-slate-200 text-slate-800 border-slate-300' },
 ];
 
+// Helpers to safely parse JSON or array categories and QC parameters
+const parseCategories = (categories: any, fallbackCategory: string = 'active'): string[] => {
+  if (Array.isArray(categories)) {
+    const filtered = categories.filter(Boolean);
+    if (filtered.length > 0) return filtered;
+  }
+  if (typeof categories === 'string' && categories.trim()) {
+    try {
+      const parsed = JSON.parse(categories);
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter(Boolean);
+        if (filtered.length > 0) return filtered;
+      }
+    } catch {}
+    return [categories.trim()];
+  }
+  return fallbackCategory ? [fallbackCategory] : ['active'];
+};
+
+const parseQcParameters = (params: any): any[] => {
+  if (Array.isArray(params)) return params;
+  if (typeof params === 'string' && params.trim()) {
+    try {
+      const parsed = JSON.parse(params);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return [];
+};
+
 interface RndMaterialsTabProps {
   rawMaterials: RawMaterial[];
   onSaveRM: (rm: RawMaterial) => void;
@@ -351,11 +381,8 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     setRmChemName(rm.chemicalName);
     
     // Categories multi-select resolution
-    if (rm.categories && rm.categories.length > 0) {
-      setRmCategories(rm.categories);
-    } else {
-      setRmCategories([rm.category]);
-    }
+    const resolvedCats = parseCategories(rm.categories, rm.category);
+    setRmCategories(resolvedCats);
     setRmOtherCategorySpec(rm.otherCategorySpecification || '');
     
     setRmStorage(rm.storageConditions);
@@ -396,8 +423,9 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     setFilterSameInciOnly(true);
     
     // Jika data lama tidak memiliki qcParameters, sediakan parameter default
-    setRmQcParams(rm.qcParameters && rm.qcParameters.length > 0 
-      ? [...rm.qcParameters]
+    const currentQc = parseQcParameters(rm.qcParameters);
+    setRmQcParams(currentQc.length > 0 
+      ? [...currentQc]
       : [
           { name: 'Bentuk', specification: 'Bubuk' },
           { name: 'Warna', specification: 'Putih' },
@@ -1008,7 +1036,8 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
             <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
               {currentItems.length > 0 ? (
                 currentItems.map((rm, idx) => {
-                  const displayCategories = rm.categories && rm.categories.length > 0 ? rm.categories : [rm.category];
+                  const displayCategories = parseCategories(rm.categories, rm.category);
+                  const rowQcParams = parseQcParameters(rm.qcParameters);
                   return (
                     <tr 
                       key={rm.id} 
@@ -1063,9 +1092,9 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                       
                       {/* QC Parameters Count */}
                       <td className="py-1.5 px-3 font-bold text-slate-600">
-                        {rm.qcParameters && rm.qcParameters.length > 0 ? (
+                        {rowQcParams.length > 0 ? (
                           <span className="px-2 py-0.5 rounded bg-purple-50 border border-purple-100 text-purple-700 text-[11px] font-bold font-mono">
-                            {rm.qcParameters.length} Parameter
+                            {rowQcParams.length} Parameter
                           </span>
                         ) : (
                           <span className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.25 rounded text-[10px] font-medium">
@@ -1647,7 +1676,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                               if (!isValidInci(itemInci) || itemInci !== normalizedCurrentInci) return false;
                             }
                             if (filterSimilarCategoryOnly) {
-                              const itemCats = rm.categories || [rm.category];
+                              const itemCats = parseCategories(rm.categories, rm.category);
                               if (!rmCategories.some((c) => itemCats.includes(c))) return false;
                             }
                             if (substituteSearchQuery.trim()) {
@@ -2336,11 +2365,11 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                             <td className="p-2.5 uppercase text-[9px] font-bold text-purple-600">{rm.category}</td>
                             <td className="p-2.5">{rm.manufacturer}</td>
                             <td className="p-2.5 font-mono">
-                              {rm.approvedSubstitutes.length > 0 ? rm.approvedSubstitutes.join(', ') : '-'}
+                              {Array.isArray(rm.approvedSubstitutes) && rm.approvedSubstitutes.length > 0 ? rm.approvedSubstitutes.join(', ') : '-'}
                             </td>
                             <td className="p-2.5 pr-3">
                               <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                {rm.qcParameters.map((p, pIdx) => (
+                                {parseQcParameters(rm.qcParameters).map((p, pIdx) => (
                                   <span key={pIdx} className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[8px] whitespace-nowrap">
                                     {p.name}: {p.specification}
                                   </span>
@@ -2425,10 +2454,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                     <span className="font-mono font-bold text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.25 rounded">
                       No. Spesifikasi: {selectedRMForDetails.specNumber || `SP-BB-${selectedRMForDetails.code}`}
                     </span>
-                    {(selectedRMForDetails.categories && selectedRMForDetails.categories.length > 0
-                      ? selectedRMForDetails.categories
-                      : [selectedRMForDetails.category]
-                    ).map((catKey) => {
+                    {parseCategories(selectedRMForDetails.categories, selectedRMForDetails.category).map((catKey) => {
                       const cfg = RAW_MATERIAL_CATEGORIES.find((c) => c.id === catKey);
                       return (
                         <span
@@ -2530,35 +2556,42 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
 
               {/* Bagian B */}
               <div>
-                <h4 className="text-[10px] font-extrabold text-purple-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-700"></span>
-                  Bagian B: Spesifikasi Mutu Laboratorium QC ({selectedRMForDetails.qcParameters?.length || 0} Kriteria)
-                </h4>
+                {(() => {
+                  const detailQcParams = parseQcParameters(selectedRMForDetails.qcParameters);
+                  return (
+                    <>
+                      <h4 className="text-[10px] font-extrabold text-purple-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-700"></span>
+                        Bagian B: Spesifikasi Mutu Laboratorium QC ({detailQcParams.length} Kriteria)
+                      </h4>
 
-                {selectedRMForDetails.qcParameters && selectedRMForDetails.qcParameters.length > 0 ? (
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[9px] tracking-wider">
-                          <th className="py-1.5 px-3 w-1/2">Parameter Analisa</th>
-                          <th className="py-1.5 px-3 w-1/2">Syarat / Batas Penerimaan</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700 bg-white font-medium">
-                        {selectedRMForDetails.qcParameters.map((param, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/40">
-                            <td className="py-1.5 px-3 font-bold text-slate-800">{param.name}</td>
-                            <td className="py-1.5 px-3 font-mono text-slate-600">{param.specification}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 border border-dashed border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-400">
-                    Bahan baku ini tidak memiliki kriteria QC.
-                  </div>
-                )}
+                      {detailQcParams.length > 0 ? (
+                        <div className="border border-slate-200 rounded-xl overflow-hidden">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[9px] tracking-wider">
+                                <th className="py-1.5 px-3 w-1/2">Parameter Analisa</th>
+                                <th className="py-1.5 px-3 w-1/2">Syarat / Batas Penerimaan</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-slate-700 bg-white font-medium">
+                              {detailQcParams.map((param, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50/40">
+                                  <td className="py-1.5 px-3 font-bold text-slate-800">{param.name}</td>
+                                  <td className="py-1.5 px-3 font-mono text-slate-600">{param.specification}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 border border-dashed border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-400">
+                          Bahan baku ini tidak memiliki kriteria QC.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
 

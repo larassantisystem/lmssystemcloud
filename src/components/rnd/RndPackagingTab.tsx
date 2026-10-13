@@ -88,6 +88,17 @@ export const DEFAULT_QC_PARAMS: QCParameter[] = [
   { name: 'Kecocokan Pasangan', specification: 'Pasangan tutup dan wadah presisi / sealing rapat' },
 ];
 
+const parseQcParameters = (params: any): any[] => {
+  if (Array.isArray(params)) return params;
+  if (typeof params === 'string' && params.trim()) {
+    try {
+      const parsed = JSON.parse(params);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return [];
+};
+
 import { Pagination } from '../../core/ui-components/Pagination';
 
 export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
@@ -200,9 +211,10 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
     setPmReorderPoint(pm.reorderPoint ?? 100);
     setValidationErrors([]);
 
+    const currentQc = parseQcParameters(pm.qcParameters);
     setPmQcParams(
-      pm.qcParameters && pm.qcParameters.length > 0
-        ? [...pm.qcParameters]
+      currentQc.length > 0
+        ? [...currentQc]
         : DEFAULT_QC_PARAMS.map(p => ({ ...p }))
     );
 
@@ -1574,7 +1586,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                                 <td className="p-2.5">{pm.supplier}</td>
                                 <td className="p-2.5 pr-3">
                                   <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                    {pm.qcParameters.map((p: any, pIdx: number) => (
+                                    {parseQcParameters(pm.qcParameters).map((p: any, pIdx: number) => (
                                       <span key={pIdx} className="bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[8px] whitespace-nowrap">
                                         {p.name}: {p.specification}
                                       </span>
@@ -1721,37 +1733,44 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
 
               {/* Bagian B */}
               <div>
-                <h4 className="text-[10px] font-extrabold text-purple-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-700"></span>
-                  Bagian B: Spesifikasi Mutu QC Kemasan ({selectedPMForDetails.qcParameters?.length || 0} Kriteria)
-                </h4>
+                {(() => {
+                  const detailQc = parseQcParameters(selectedPMForDetails.qcParameters);
+                  return (
+                    <>
+                      <h4 className="text-[10px] font-extrabold text-purple-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-700"></span>
+                        Bagian B: Spesifikasi Mutu QC Kemasan ({detailQc.length} Kriteria)
+                      </h4>
 
-                {selectedPMForDetails.qcParameters && selectedPMForDetails.qcParameters.length > 0 ? (
-                  <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[9px] tracking-wider">
-                          <th className="py-1.5 px-3 w-10 text-center">No</th>
-                          <th className="py-1.5 px-3 w-5/12">Parameter Analisa / Pengujian</th>
-                          <th className="py-1.5 px-3 w-6/12">Syarat / Batas Penerimaan Mutu</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700 bg-white font-medium">
-                        {selectedPMForDetails.qcParameters.map((param, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/40">
-                            <td className="py-1.5 px-3 text-center font-mono text-[10px] text-slate-400 font-bold">{idx + 1}</td>
-                            <td className="py-1.5 px-3 font-bold text-slate-800">{param.name}</td>
-                            <td className="py-1.5 px-3 text-slate-700">{param.specification}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-4 border border-dashed border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-400">
-                    Bahan kemas ini tidak memiliki kriteria QC.
-                  </div>
-                )}
+                      {detailQc.length > 0 ? (
+                        <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[9px] tracking-wider">
+                                <th className="py-1.5 px-3 w-10 text-center">No</th>
+                                <th className="py-1.5 px-3 w-5/12">Parameter Analisa / Pengujian</th>
+                                <th className="py-1.5 px-3 w-6/12">Syarat / Batas Penerimaan Mutu</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-slate-700 bg-white font-medium">
+                              {detailQc.map((param, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50/40">
+                                  <td className="py-1.5 px-3 text-center font-mono text-[10px] text-slate-400 font-bold">{idx + 1}</td>
+                                  <td className="py-1.5 px-3 font-bold text-slate-800">{param.name}</td>
+                                  <td className="py-1.5 px-3 text-slate-700">{param.specification}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 border border-dashed border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-400">
+                          Bahan kemas ini tidak memiliki kriteria QC.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
 

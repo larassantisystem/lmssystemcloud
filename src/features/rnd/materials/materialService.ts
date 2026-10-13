@@ -98,27 +98,45 @@ export const materialService = {
         }
 
         if (allFetchedRows.length > 0) {
-          const mapped: RawMaterial[] = allFetchedRows.map((m: any) => ({
-            id: m.id,
-            code: m.code,
-            specNumber: m.spec_number || m.specNumber || `SP-BB-${m.code}`,
-            name: m.name,
-            chemicalName: m.chemical_name || m.chemicalName || '',
-            category: m.category || 'active',
-            categories: m.categories || (m.category ? [m.category] : ['active']),
-            otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
-            storageConditions: m.storage_conditions || m.storageConditions || '',
-            sdsDocNumber: m.sds_doc_number || m.sdsDocNumber || '',
-            sdsFileUrl: m.sds_file_url || m.sdsFileUrl,
-            sdsFileName: m.sds_file_name || m.sdsFileName,
-            approvedSubstitutes: m.approved_substitutes || m.approvedSubstitutes || [],
-            manufacturer: m.manufacturer || '',
-            qcParameters: m.qc_parameters || m.qcParameters || [],
-            supplierLeadTimeDays: m.supplier_lead_time_days ?? m.supplierLeadTimeDays ?? 14,
-            reorderPoint: m.reorder_point ?? m.reorderPoint ?? 50,
-            lastModifiedBy: m.last_modified_by || m.lastModifiedBy,
-            lastModifiedAt: m.last_modified_at || m.lastModifiedAt,
-          }));
+          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string' && val.trim()) {
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return parsed;
+              } catch {}
+            }
+            return fallback;
+          };
+
+          const mapped: RawMaterial[] = allFetchedRows.map((m: any) => {
+            const rawCats = parseJsonArray<string>(m.categories, []);
+            const resolvedCategories = rawCats.length > 0 
+              ? rawCats 
+              : (m.category ? [m.category] : ['active']);
+
+            return {
+              id: m.id,
+              code: m.code,
+              specNumber: m.spec_number || m.specNumber || `SP-BB-${m.code}`,
+              name: m.name,
+              chemicalName: m.chemical_name || m.chemicalName || '',
+              category: m.category || resolvedCategories[0] || 'active',
+              categories: resolvedCategories,
+              otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
+              storageConditions: m.storage_conditions || m.storageConditions || '',
+              sdsDocNumber: m.sds_doc_number || m.sdsDocNumber || '',
+              sdsFileUrl: m.sds_file_url || m.sdsFileUrl,
+              sdsFileName: m.sds_file_name || m.sdsFileName,
+              approvedSubstitutes: parseJsonArray(m.approved_substitutes || m.approvedSubstitutes, []),
+              manufacturer: m.manufacturer || '',
+              qcParameters: parseJsonArray(m.qc_parameters || m.qcParameters, []),
+              supplierLeadTimeDays: m.supplier_lead_time_days ?? m.supplierLeadTimeDays ?? 14,
+              reorderPoint: m.reorder_point ?? m.reorderPoint ?? 50,
+              lastModifiedBy: m.last_modified_by || m.lastModifiedBy,
+              lastModifiedAt: m.last_modified_at || m.lastModifiedAt,
+            };
+          });
           inMemoryRawMaterials = mapped;
           lastFetchTime = Date.now();
           return mapped;

@@ -248,39 +248,50 @@ export const productService = {
 
       const mapped = allRows.map((p: any) => {
         const pVariants = variantsByProductId[p.id] || [];
-        return {
-          id: p.id,
-          code: p.product_code || p.code || '',
-          productCode: p.product_code || p.code || '',
-          name: p.name || '',
-          brand: p.brand || '',
-          category: p.category || '',
-          description: p.description || '',
-          unit: p.unit || 'pcs (Pieces)',
-          storageConditions: p.storage_conditions || '',
-          bpomNotificationNumber: p.bpom_notification_number || '',
-          bpomNotificationExt: p.exp_notification_date || '',
-          expNotificationDate: p.exp_notification_date || '',
-          qcParameters: p.qc_parameters || [],
-          finishedQcParameters: p.finished_parameters || p.finished_qc_parameters || [],
-          createdAt: p.created_at,
-          variants: pVariants.map((v: any) => ({
-            id: v.id,
-            productId: v.product_id || p.id,
-            variantCode: v.sku || v.variant_code || '',
-            sku: v.sku || v.variant_code || '',
-            variantName: v.variant_name || '',
-            status: v.status || 'active',
-            netVolumeGrams: Number(v.net_volume_grams) || 0,
-            bulkFormulaCode: v.bulk_formula_code || '',
-            packagingBom: v.packaging_bom || [],
-            bpomNumber: v.bpom_number || '',
-            barcode: v.barcode || '',
-            description: v.description || '',
-            createdAt: v.created_at,
-          })),
-        };
-      });
+          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string' && val.trim()) {
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return parsed;
+              } catch {}
+            }
+            return fallback;
+          };
+
+          return {
+            id: p.id,
+            code: p.product_code || p.code || '',
+            productCode: p.product_code || p.code || '',
+            name: p.name || '',
+            brand: p.brand || '',
+            category: p.category || '',
+            description: p.description || '',
+            unit: p.unit || 'pcs (Pieces)',
+            storageConditions: p.storage_conditions || '',
+            bpomNotificationNumber: p.bpom_notification_number || '',
+            bpomNotificationExt: p.exp_notification_date || '',
+            expNotificationDate: p.exp_notification_date || '',
+            qcParameters: parseJsonArray(p.qc_parameters, []),
+            finishedQcParameters: parseJsonArray(p.finished_parameters || p.finished_qc_parameters, []),
+            createdAt: p.created_at,
+            variants: pVariants.map((v: any) => ({
+              id: v.id,
+              productId: v.product_id || p.id,
+              variantCode: v.sku || v.variant_code || '',
+              sku: v.sku || v.variant_code || '',
+              variantName: v.variant_name || '',
+              status: v.status || 'active',
+              netVolumeGrams: Number(v.net_volume_grams) || 0,
+              bulkFormulaCode: v.bulk_formula_code || '',
+              packagingBom: parseJsonArray(v.packaging_bom, []),
+              bpomNumber: v.bpom_number || '',
+              barcode: v.barcode || '',
+              description: v.description || '',
+              createdAt: v.created_at,
+            })),
+          };
+        });
 
       inMemoryProducts = mapped;
       lastProductsFetchTime = Date.now();
@@ -359,9 +370,11 @@ export const productService = {
 
     try {
       // 1. Simpan Master Produk ke tabel 'products'
+      const pCode = (prod.productCode || prod.code).trim().toUpperCase();
       let productPayload: any = {
         id: prod.id,
-        product_code: (prod.productCode || prod.code).trim().toUpperCase(),
+        code: pCode,
+        product_code: pCode,
         name: prod.name.trim(),
         brand: prod.brand.trim(),
         exp_notification_date: formatToISODate(prod.expNotificationDate || prod.bpomNotificationExt),
@@ -598,21 +611,25 @@ export const productService = {
       for (let i = 0; i < products.length; i += chunkSize) {
         const chunk = products.slice(i, i + chunkSize);
 
-        const payloads = chunk.map((prod) => ({
-          id: prod.id,
-          product_code: (prod.productCode || prod.code).trim().toUpperCase(),
-          name: prod.name.trim(),
-          brand: prod.brand.trim(),
-          exp_notification_date: formatToISODate(prod.expNotificationDate || prod.bpomNotificationExt),
-          category: prod.category || '',
-          description: prod.description || '',
-          unit: prod.unit || 'pcs (Pieces)',
-          storage_conditions: prod.storageConditions || '',
-          bpom_notification_number: prod.bpomNotificationNumber || '',
-          qc_parameters: prod.qcParameters || [],
-          finished_parameters: prod.finishedQcParameters || [],
-          created_at: prod.createdAt || new Date().toISOString(),
-        }));
+        const payloads = chunk.map((prod) => {
+          const pCode = (prod.productCode || prod.code).trim().toUpperCase();
+          return {
+            id: prod.id,
+            code: pCode,
+            product_code: pCode,
+            name: prod.name.trim(),
+            brand: prod.brand.trim(),
+            exp_notification_date: formatToISODate(prod.expNotificationDate || prod.bpomNotificationExt),
+            category: prod.category || '',
+            description: prod.description || '',
+            unit: prod.unit || 'pcs (Pieces)',
+            storage_conditions: prod.storageConditions || '',
+            bpom_notification_number: prod.bpomNotificationNumber || '',
+            qc_parameters: prod.qcParameters || [],
+            finished_parameters: prod.finishedQcParameters || [],
+            created_at: prod.createdAt || new Date().toISOString(),
+          };
+        });
 
         let res = await productService.withNetworkRetry(async () => {
           return await supabase

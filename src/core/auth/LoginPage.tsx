@@ -15,9 +15,12 @@ import {
   X,
   AlertCircle,
   RotateCcw,
+  Cloud,
+  Settings,
 } from 'lucide-react';
 import { Logo } from '../../components/Logo';
 import { UniversalQrScannerModal } from '../../components/UniversalQrScannerModal';
+import { CloudflareConfigModal } from '../../components/CloudflareConfigModal';
 
 interface CloudflareAccountItem {
   nik: string;
@@ -206,6 +209,7 @@ export const LoginPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showScanner, setShowScanner] = useState<boolean>(false);
+  const [showCloudflareModal, setShowCloudflareModal] = useState<boolean>(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -376,10 +380,16 @@ export const LoginPage: React.FC = () => {
                   Silakan masuk dengan NIK dan kata sandi akun terdaftar
                 </p>
               </div>
-              <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-orange-500/10 border border-orange-500/30 text-orange-400 text-[10px] font-bold">
+              <button
+                type="button"
+                onClick={() => setShowCloudflareModal(true)}
+                title="Pengaturan Koneksi Cloudflare D1 (Opsi A)"
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-[10px] font-bold cursor-pointer transition-all active:scale-95"
+              >
                 <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></span>
-                <span>Cloudflare D1 Active</span>
-              </div>
+                <span>Cloudflare D1 Setup</span>
+                <Settings className="w-3 h-3 text-orange-300 ml-0.5" />
+              </button>
             </div>
 
             {/* Login Form */}
@@ -513,6 +523,12 @@ export const LoginPage: React.FC = () => {
       <UniversalQrScannerModal
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
+      />
+
+      {/* Cloudflare D1 Connection Settings Modal (Opsi A) */}
+      <CloudflareConfigModal
+        isOpen={showCloudflareModal}
+        onClose={() => setShowCloudflareModal(false)}
       />
     </div>
   );

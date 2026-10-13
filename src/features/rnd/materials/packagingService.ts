@@ -98,6 +98,17 @@ export const packagingService = {
         }
 
         if (allFetchedRows.length > 0) {
+          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string' && val.trim()) {
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return parsed;
+              } catch {}
+            }
+            return fallback;
+          };
+
           const mapped: PackagingMaterial[] = allFetchedRows.map((p: any) => ({
             id: p.id,
             code: p.code,
@@ -110,7 +121,7 @@ export const packagingService = {
             manufacturer: p.manufacturer || p.supplier || '',
             storageLocation: p.storage_location || p.storageLocation || '',
             storageConditions: p.storage_conditions || p.storageConditions || '',
-            qcParameters: p.qc_parameters || p.qcParameters || [],
+            qcParameters: parseJsonArray(p.qc_parameters || p.qcParameters, []),
             reorderPoint: p.reorder_point ?? p.reorderPoint ?? 100,
             lastModifiedBy: p.last_modified_by || p.lastModifiedBy,
             lastModifiedAt: p.last_modified_at || p.lastModifiedAt,
