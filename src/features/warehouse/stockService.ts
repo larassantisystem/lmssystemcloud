@@ -102,30 +102,28 @@ export const stockService = {
     const storedLots: StockLotItem[] = grns.map((grn) => {
       const qcReport = qcReports.find((r) => r.grnId === grn.id || r.grnNumber === grn.grnNumber);
 
-      // Determine QC status and Lot Internal Number
       let currentQcStatus: GrnQcStatus = grn.qcStatus || 'QUARANTINE';
-      let lotInternal = '';
-      let releasedDate: string | undefined;
+      let lotInternal = grn.internalLotNumber || grn.qcPayload?.lotInternalNumber || '';
+      let releasedDate: string | undefined = qcReport?.qmSignature?.signedAt;
 
-      // Automatically map initial stock records to RELEASED
-      if (grn.grnNumber && grn.grnNumber.startsWith('SA-OPN-')) {
+      if (
+        grn.qcStatus === 'RELEASED' ||
+        grn.qcStatus === 'PASSED' ||
+        grn.qcStatus === 'PASSED_WITH_DEVIATION' ||
+        grn.qcStatus === 'RELEASE_DEVIATION' ||
+        (qcReport && (qcReport.status === 'PASSED' || qcReport.status === 'PASSED_WITH_DEVIATION' || qcReport.status === 'RELEASED' || (qcReport as any).status === 'RELEASE_DEVIATION'))
+      ) {
         currentQcStatus = 'RELEASED';
-        lotInternal = grn.internalLotNumber || grn.qcPayload?.lotInternalNumber || 'STK-AWAL';
+        releasedDate = releasedDate || grn.updatedAt || grn.receivedDate;
+      } else if (grn.qcStatus === 'REJECTED' || (qcReport && qcReport.status === 'REJECTED')) {
+        currentQcStatus = 'REJECTED';
+      } else if (grn.grnNumber && grn.grnNumber.startsWith('SA-OPN-')) {
+        currentQcStatus = 'RELEASED';
         releasedDate = grn.receivedDate;
-      } else if (qcReport) {
-        if (qcReport.status === 'PASSED' || qcReport.status === 'PASSED_WITH_DEVIATION') {
-          currentQcStatus = 'RELEASED';
-        } else if (qcReport.status === 'REJECTED') {
-          currentQcStatus = 'REJECTED';
-        } else {
-          currentQcStatus = 'QUARANTINE';
-        }
-        if (qcReport.lotInternalNumber) {
-          lotInternal = normalizeLotNumber(qcReport.lotInternalNumber);
-        }
-        if (qcReport.qmSignature?.signedAt) {
-          releasedDate = qcReport.qmSignature.signedAt;
-        }
+      }
+
+      if (qcReport?.lotInternalNumber) {
+        lotInternal = normalizeLotNumber(qcReport.lotInternalNumber);
       }
 
       if (!lotInternal) {
@@ -138,13 +136,9 @@ export const stockService = {
         }
       }
 
-      const initialQty = grn.quantityReceived;
-      // Extract current quantity from grn.currentQuantity, then qcPayload, else fallback to initial
-      const currentQty = grn.currentQuantity !== undefined
-        ? grn.currentQuantity
-        : (grn.qcPayload?.currentQuantity !== undefined
-            ? grn.qcPayload.currentQuantity
-            : initialQty);
+      const initialQty = Number(grn.quantityReceived || 0);
+      const cQty = Number(grn.currentQuantity ?? grn.qcPayload?.currentQuantity ?? 0);
+      const currentQty = cQty > 0 ? cQty : (initialQty > 0 ? initialQty : Number(grn.quantityReceived || 0));
 
       // Determine storage location based on state and grn record
       let storageLocation = grn.storageLocation;

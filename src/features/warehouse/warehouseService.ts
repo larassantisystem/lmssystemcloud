@@ -320,9 +320,9 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
         ? calculateAutoRetestDate('raw', d.expiration_date || d.expiry_date || d.expiryDate, d.received_date || d.receivedDate)
         : undefined),
     quantityReceived: Number(d.quantity_received || d.quantityReceived || 0),
-    currentQuantity: d.current_quantity !== undefined && d.current_quantity !== null
+    currentQuantity: Number(d.current_quantity || 0) > 0
       ? Number(d.current_quantity)
-      : (qcPayload?.currentQuantity !== undefined
+      : (Number(qcPayload?.currentQuantity || 0) > 0
           ? Number(qcPayload.currentQuantity)
           : Number(d.quantity_received || d.quantityReceived || 0)),
     unit: d.unit || 'kg',
