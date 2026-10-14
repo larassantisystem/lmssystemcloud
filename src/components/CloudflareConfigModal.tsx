@@ -23,6 +23,7 @@ interface CloudflareConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfigChanged?: () => void;
+  onOpenSupabaseMigration?: () => void;
 }
 
 interface CloudflareStatusData {
@@ -42,6 +43,7 @@ export const CloudflareConfigModal: React.FC<CloudflareConfigModalProps> = ({
   isOpen,
   onClose,
   onConfigChanged,
+  onOpenSupabaseMigration,
 }) => {
   const [status, setStatus] = useState<CloudflareStatusData | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
@@ -562,18 +564,30 @@ export const CloudflareConfigModal: React.FC<CloudflareConfigModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>Kredensial disimpan aman di backend server tanpa terekspos ke klien browser.</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold transition-colors cursor-pointer"
-          >
-            Tutup
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            {onOpenSupabaseMigration && (
+              <button
+                type="button"
+                onClick={onOpenSupabaseMigration}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Migrasi dari Supabase</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold transition-colors cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
         </div>
       </div>
     </div>

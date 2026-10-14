@@ -14,6 +14,7 @@ export interface DepartmentNotificationItem {
   timestamp: string;
   isRead: boolean;
   actionLabel?: string;
+  linkTo?: { tab: string; subTab?: string } | string;
 }
 
 export interface DepartmentNotificationCounts {

@@ -60,7 +60,7 @@ export const PublicCoaVerificationPage: React.FC<PublicCoaVerificationPageProps>
           const grn = (r.grnNumber || '').toLowerCase();
           const repNum = (r.reportNumber || '').toLowerCase();
           const id = (r.id || '').toLowerCase();
-          const batch = (r.batchNumber || '').toLowerCase();
+          const batch = ((r as any).batchNumber || r.batchNumberVendor || '').toLowerCase();
 
           return (
             id === cleanQuery ||
@@ -301,7 +301,7 @@ export const PublicCoaVerificationPage: React.FC<PublicCoaVerificationPageProps>
                     Batch / Lot Vendor
                   </span>
                   <span className="font-mono font-bold text-slate-900 text-xs block mt-0.5 truncate">
-                    {selectedReport.batchNumber || '-'}
+                    {(selectedReport as any).batchNumber || selectedReport.batchNumberVendor || '-'}
                   </span>
                 </div>
 

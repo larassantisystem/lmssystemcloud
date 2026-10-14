@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthContext';
 import { canAccessModule } from '../auth/permissionGuard';
 import { Department } from '../../types';
 import { supabase, isSupabaseConfigured } from '../auth/supabaseClient';
+import { SupabaseMigrationModal } from '../../components/admin/SupabaseMigrationModal';
 import {
   FlaskConical,
   CalendarDays,
@@ -38,6 +39,7 @@ import {
   QrCode,
   Cloud,
   Settings,
+  Database,
 } from 'lucide-react';
 import { Logo } from '../../components/Logo';
 import { GlobalNotificationCenter } from '../notifications/GlobalNotificationCenter';
@@ -87,6 +89,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [showGoogleDrive, setShowGoogleDrive] = useState(false);
   const [showCloudflareModal, setShowCloudflareModal] = useState(false);
+  const [showSupabaseMigration, setShowSupabaseMigration] = useState(false);
   const [isRemoteDb, setIsRemoteDb] = useState(false);
   const [counts, setCounts] = useState<DepartmentNotificationCounts>({
     all: 0,
@@ -112,16 +115,25 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [dbStatus, setDbStatus] = useState<'testing' | 'connected' | 'fallback'>('testing');
 
   const checkConnection = async () => {
+    console.info('[Cloudflare D1 Diagnostic] Checking connection status at /api/cloudflare/status...');
     try {
       const res = await fetch('/api/cloudflare/status');
-      if (res.ok) {
-        const data = await res.json();
-        setIsRemoteDb(Boolean(data.isRemote));
-        setDbStatus(data.isRemote ? 'connected' : 'fallback');
+      console.info('[Cloudflare D1 Diagnostic] Status endpoint response status:', res.status, res.statusText);
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.error('[Cloudflare D1 Diagnostic] Expected JSON response but received non-JSON or HTML:', text.slice(0, 300));
+        setDbStatus('fallback');
         return;
       }
-    } catch (err) {}
-    setDbStatus('connected');
+      const data = await res.json();
+      console.info('[Cloudflare D1 Diagnostic] Parsed database status details:', data);
+      setIsRemoteDb(Boolean(data.isRemote));
+      setDbStatus(data.isRemote && data.connectionValid ? 'connected' : 'fallback');
+    } catch (err: any) {
+      console.error('[Cloudflare D1 Diagnostic] Exception occurred while fetching /api/cloudflare/status:', err?.message || err);
+      setDbStatus('fallback');
+    }
   };
 
   useEffect(() => {
@@ -430,7 +442,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           </button>
 
           {/* Google Drive Integration Button (Admin Only) */}
-          {(user?.role === 'admin' || user?.role === 'superadmin' || user?.department === 'management' || canAccessModule(user, 'admin')) && (
+          {(user?.role === 'admin' || user?.department === 'management' || canAccessModule(user, 'admin')) && (
             <button
               type="button"
               onClick={() => setShowGoogleDrive(true)}
@@ -532,6 +544,23 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                     </span>
                     <span className="text-[10px] font-mono bg-white px-1.5 py-0.5 rounded border border-orange-200">
                       {isRemoteDb ? 'Remote' : 'Setup'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      setShowSupabaseMigration(true);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-xl text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-emerald-600" />
+                      Backup & Migrasi Data Supabase
+                    </span>
+                    <span className="text-[10px] font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-700">
+                      Transfer
                     </span>
                   </button>
 
@@ -825,6 +854,17 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         isOpen={showCloudflareModal}
         onClose={() => setShowCloudflareModal(false)}
         onConfigChanged={checkConnection}
+        onOpenSupabaseMigration={() => {
+          setShowCloudflareModal(false);
+          setShowSupabaseMigration(true);
+        }}
+      />
+
+      {/* Supabase Migration / Import Modal */}
+      <SupabaseMigrationModal
+        isOpen={showSupabaseMigration}
+        onClose={() => setShowSupabaseMigration(false)}
+        onMigrationComplete={checkConnection}
       />
     </div>
   );

@@ -487,7 +487,7 @@ export const QcStatusLabelModal: React.FC<QcStatusLabelModalProps> = ({
                           </div>
                           <div className="flex justify-between border-b border-black/20 pb-0.5">
                             <span className="font-bold text-black/70">Batch / Lot Vendor:</span>
-                            <span className="font-mono font-bold text-black truncate max-w-[110px]">{rep.batchNumber || rep.batchNumberVendor || '-'}</span>
+                            <span className="font-mono font-bold text-black truncate max-w-[110px]">{(rep as any).batchNumber || rep.batchNumberVendor || '-'}</span>
                           </div>
                           <div className="flex justify-between border-b border-black/20 pb-0.5">
                             <span className="font-bold text-black/70">Produsen:</span>

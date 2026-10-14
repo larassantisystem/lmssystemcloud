@@ -117,7 +117,7 @@ export const qualityService = {
         if (matchedPM?.qcParameters && matchedPM.qcParameters.length > 0) {
           resolvedParams = matchedPM.qcParameters
             .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name, spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
         }
       } else {
         const matchedRM = rawMaterials.find(
@@ -126,7 +126,7 @@ export const qualityService = {
         if (matchedRM?.qcParameters && matchedRM.qcParameters.length > 0) {
           resolvedParams = matchedRM.qcParameters
             .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name, spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
         }
       }
 
@@ -328,7 +328,7 @@ export const qualityService = {
               );
               const remoteVal = typeof remoteP.resultValue === 'string' ? remoteP.resultValue.trim() : '';
               const localVal = localP && typeof localP.resultValue === 'string' ? localP.resultValue.trim() : '';
-              const finalVal = remoteVal !== '' ? remoteP.resultValue : (localVal !== '' ? localP.resultValue : '');
+              const finalVal = remoteVal !== '' ? remoteP.resultValue : (localVal !== '' ? localP?.resultValue : '');
 
               return {
                 ...remoteP,
@@ -1187,7 +1187,7 @@ export const qualityService = {
         if (pm?.qcParameters && pm.qcParameters.length > 0) {
           masterParams = pm.qcParameters
             .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name, spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
         }
       } else {
         const rm = rawMaterials.find(
@@ -1196,7 +1196,7 @@ export const qualityService = {
         if (rm?.qcParameters && rm.qcParameters.length > 0) {
           masterParams = rm.qcParameters
             .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name, spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
         }
       }
 

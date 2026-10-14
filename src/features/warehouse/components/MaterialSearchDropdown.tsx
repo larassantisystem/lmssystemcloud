@@ -42,7 +42,7 @@ export const MaterialSearchDropdown: React.FC<MaterialSearchDropdownProps> = ({
         code: rm.code,
         name: rm.name,
         chemicalName: rm.chemicalName,
-        manufacturer: rm.manufacturer || rm.supplier || '-',
+        manufacturer: rm.manufacturer || '-',
         category: rm.categories && rm.categories.length > 0 ? rm.categories[0] : (rm.category || 'Bahan Baku'),
         unit: 'kg',
         storageConditions: rm.storageConditions || '-',

@@ -1780,7 +1780,7 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!newIpc.batchNo.trim() || !newIpc.productName.trim()) return;
+                  if (!newIpc?.batchNo?.trim() || !newIpc?.productName?.trim()) return;
                   const isPassed = Number(newIpc.pH) >= 5.0 && Number(newIpc.pH) <= 7.5 && Number(newIpc.viscosity) >= 1500 && Number(newIpc.viscosity) <= 18000;
                   const inputItem = {
                     batchNo: newIpc.batchNo.trim().toUpperCase(),

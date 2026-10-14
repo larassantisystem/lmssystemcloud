@@ -1,0 +1,6 @@
+{
+  "summary": "Rencana implementasi integrasi backup dan migrasi langsung dari Supabase ke Cloudflare D1 untuk seluruh data perusahaan (User Profile, GRN, Raw Materials, Packaging Materials, Products, dan Bulk Formulations) dengan opsi koneksi API langsung serta upload backup file.",
+  "updatedAt": "2026-10-14T07:06:41.126877583Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

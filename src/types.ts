@@ -28,6 +28,7 @@ export interface UserProfile {
   id: string;
   nik: string;
   name: string;
+  username?: string;
   department: Department;
   role: Role;
   position?: string;
@@ -132,6 +133,9 @@ export interface BulkFormulation {
   mixingInstructions?: string; // Catatan Teknis Formulasi / Petunjuk Pengolahan
   dynamicProcessSteps?: any; // JSON representation of DynamicProcessStep[]
   technicalNotes?: string; // Mesin dan catatan teknis
+  documentNumber?: string;
+  effectiveDate?: string;
+  revision?: string;
   createdAt?: string;
   updatedAt?: string;
   createdBy?: string;
@@ -170,11 +174,13 @@ export interface Product {
   unit?: string; // e.g. "pcs (Pieces)"
   storageConditions?: string; // e.g. "Suhu Ruang (15-25°C), Kering, Bebas Cahaya Langsung"
   bpomNotificationNumber?: string; // e.g. "NA18220100123"
+  bpomNumber?: string;
   bpomNotificationExt?: string; // e.g. "2028-12-31 / Ext-01"
   expNotificationDate?: string; // DB column mapping for exp_notification_date
   qcParameters?: QCParameter[]; // Bulk specs
   bulkQcParameters?: QCParameter[]; // Bulk specs alias
   finishedQcParameters?: QCParameter[]; // Finished goods specs
+  specifications?: QCParameter[];
   variants: ProductVariant[];
   createdAt?: string;
 }

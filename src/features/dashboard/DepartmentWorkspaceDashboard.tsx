@@ -155,10 +155,10 @@ export const DepartmentWorkspaceDashboard: React.FC<DepartmentWorkspaceDashboard
   const activeDept = selectedDeptView === 'all' ? user?.department || 'quality' : selectedDeptView;
 
   // QC specific counts
-  const qcPendingLab = useMemo(() => qcReports.filter(r => r.status === 'DRAFT' || r.status === 'UNDER_TESTING'), [qcReports]);
-  const qcPendingQm = useMemo(() => qcReports.filter(r => r.status === 'TESTED' && (!r.qmAuthorizedBy || r.qmAuthorizedBy === '')), [qcReports]);
-  const qcReleased = useMemo(() => qcReports.filter(r => r.status === 'PASSED' || r.decision === 'RELEASE'), [qcReports]);
-  const qcRejected = useMemo(() => qcReports.filter(r => r.status === 'FAILED' || r.decision === 'REJECT'), [qcReports]);
+  const qcPendingLab = useMemo(() => qcReports.filter(r => r.status === 'QUARANTINE' || r.status === 'QUALITY_CONTROL_PROCESS'), [qcReports]);
+  const qcPendingQm = useMemo(() => qcReports.filter(r => r.status === 'AWAITING_QM_AUTHORIZATION' || (!r.qmSignature && r.status === 'QUALITY_CONTROL_PROCESS')), [qcReports]);
+  const qcReleased = useMemo(() => qcReports.filter(r => r.status === 'PASSED' || r.status === 'PASSED_WITH_DEVIATION' || r.qmDecision === 'RELEASE'), [qcReports]);
+  const qcRejected = useMemo(() => qcReports.filter(r => r.status === 'REJECTED' || r.qmDecision === 'REJECT'), [qcReports]);
 
   // Warehouse specific counts
   const whQuarantineGrns = useMemo(() => grnRecords.filter(g => g.qcStatus === 'QUARANTINE'), [grnRecords]);
@@ -1006,7 +1006,7 @@ export const DepartmentWorkspaceDashboard: React.FC<DepartmentWorkspaceDashboard
                   <div 
                     key={notif.id}
                     onClick={() => {
-                      if (notif.linkTo?.tab) {
+                      if (notif.linkTo && typeof notif.linkTo === 'object' && notif.linkTo.tab) {
                         onNavigate(notif.linkTo.tab, notif.linkTo.subTab);
                       }
                     }}

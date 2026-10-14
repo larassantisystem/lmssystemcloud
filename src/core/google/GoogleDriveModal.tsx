@@ -38,7 +38,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
   useEscapeKey(onClose, isOpen);
 
   const { user } = useAuth();
-  const isAdmin = user?.role === 'superadmin' || user?.role === 'admin' || user?.department === 'management';
+  const isAdmin = user?.role === 'admin' || user?.department === 'management';
 
   const [isConnected, setIsConnected] = useState<boolean>(googleDriveService.isConnected());
   const [currentUser, setCurrentUser] = useState<any>(googleDriveService.getCentralUser());

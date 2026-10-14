@@ -4,6 +4,7 @@ import { authService } from './authService';
 
 interface AuthContextType {
   user: UserProfile | null;
+  profile: UserProfile | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (nik: string, pass: string) => Promise<{ success: boolean; error?: string }>;
@@ -45,6 +46,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user,
+        profile: user,
         isAuthenticated: !!user,
         isLoading,
         login,

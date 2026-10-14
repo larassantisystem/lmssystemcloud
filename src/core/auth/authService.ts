@@ -185,13 +185,30 @@ export const authService = {
           return { user: userProfile, error: null };
         }
 
-        // 3. Autentikasi Langsung ke Database Supabase: Periksa tabel public.profiles
-        // Verifikasi langsung ke kolom password di tabel public.profiles
-        const { data: dbProfile, error: dbErr } = await supabase
-          .from('profiles')
-          .select('id, nik, name, department, role, position, email, password')
-          .or(`nik.ilike.${cleanNik},email.ilike.${primaryEmail}`)
-          .maybeSingle();
+        // 3. Autentikasi Langsung ke Database: Periksa tabel profiles
+        // Verifikasi langsung ke kolom password di tabel profiles
+        const formattedNik = cleanNik.toUpperCase().startsWith('LMS') ? cleanNik.toUpperCase() : `LMS${cleanNik.toUpperCase()}`;
+        let dbProfile: any = null;
+        let dbErr: any = null;
+
+        try {
+          const res = await supabase
+            .from('profiles')
+            .select('id, nik, name, department, role, position, email, password')
+            .or(`nik.ilike.${cleanNik},nik.ilike.${formattedNik},email.ilike.${primaryEmail}`)
+            .maybeSingle();
+          dbProfile = res?.data;
+          dbErr = res?.error;
+        } catch (queryErr) {
+          console.warn('[authService] or() query exception, falling back to eq:', queryErr);
+          const fallbackRes = await supabase
+            .from('profiles')
+            .select('id, nik, name, department, role, position, email, password')
+            .eq('nik', cleanNik)
+            .maybeSingle();
+          dbProfile = fallbackRes?.data;
+          dbErr = fallbackRes?.error;
+        }
 
         if (dbProfile && !dbErr) {
           // Verifikasi kata sandi langsung terhadap kolom password di table profiles Supabase

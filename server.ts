@@ -154,6 +154,11 @@ if (fs.existsSync(schemaPath)) {
       db.exec("UPDATE products SET code = product_code WHERE (code IS NULL OR code = '') AND product_code IS NOT NULL;");
     } catch (e) {}
 
+    // Clean up any empty grn_number in warehouse_grn
+    try {
+      db.exec("UPDATE warehouse_grn SET grn_number = 'GRN-' || upper(substr(hex(randomblob(4)), 1, 8)) WHERE (grn_number IS NULL OR grn_number = '');");
+    } catch (e) {}
+
     // Seed initial users into Cloudflare D1 if empty
     const checkProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get() as any;
     if (!checkProfiles || checkProfiles.count === 0) {
@@ -853,6 +858,1023 @@ app.post('/api/cloudflare/disconnect', (req: Request, res: Response) => {
   }
 });
 
+// -------------------------------------------------------------
+// DIRECT SUPABASE BACKUP & MIGRATION ENGINE (ENHANCED)
+// -------------------------------------------------------------
+const KNOWN_SUPABASE_TABLES = [
+  'profiles',
+  'raw_materials',
+  'packaging_materials',
+  'products',
+  'product_variants',
+  'bulk_formulations',
+  'warehouse_grn',
+  'qc_inspection_reports',
+  'deviations',
+  'stock_movements',
+];
+
+// Map of canonical D1 tables to potential Supabase table names/aliases
+const TABLE_ALIASES: Record<string, string[]> = {
+  warehouse_grn: [
+    'warehouse_grn',
+    'grn',
+    'goods_receipt',
+    'goods_received_note',
+    'incoming_goods',
+    'penerimaan_barang',
+    'kedatangan_barang',
+    'kedatangan',
+    'warehouse_incoming',
+    'warehouse_receipts',
+  ],
+  profiles: [
+    'profiles',
+    'user_profiles',
+    'users',
+    'employees',
+    'karyawan',
+    'auth_users',
+    'profile',
+    'accounts',
+  ],
+  raw_materials: [
+    'raw_materials',
+    'materials',
+    'bahan_baku',
+    'raw_material',
+    'material_master',
+    'items',
+  ],
+  packaging_materials: [
+    'packaging_materials',
+    'packaging',
+    'bahan_kemas',
+    'kemasan',
+    'packaging_material',
+  ],
+  products: [
+    'products',
+    'finished_goods',
+    'produk',
+    'produk_jadi',
+    'product',
+  ],
+  product_variants: [
+    'product_variants',
+    'variants',
+    'sku',
+    'varian_produk',
+  ],
+  bulk_formulations: [
+    'bulk_formulations',
+    'formulations',
+    'formulas',
+    'formula',
+    'formula_ruahan',
+    'recipes',
+  ],
+  qc_inspection_reports: [
+    'qc_inspection_reports',
+    'qc_inspections',
+    'qc_reports',
+    'qc_results',
+    'inspections',
+    'pemeriksaan_qc',
+  ],
+  deviations: [
+    'deviations',
+    'penyimpangan',
+    'deviation_reports',
+  ],
+  stock_movements: [
+    'stock_movements',
+    'stock',
+    'inventory',
+    'kartu_stok',
+    'mutasi_stok',
+    'stock_ledger',
+  ],
+};
+
+// Build reverse lookup: supabase table alias -> canonical D1 table
+const REVERSE_ALIAS_MAP: Record<string, string> = {};
+for (const [canonical, aliases] of Object.entries(TABLE_ALIASES)) {
+  for (const alias of aliases) {
+    REVERSE_ALIAS_MAP[alias.toLowerCase()] = canonical;
+  }
+}
+
+// Helper: Safely insert batch of normalized records into D1 with automatic schema extension
+async function insertRecordsIntoD1Table(tableName: string, rows: any[]): Promise<number> {
+  if (!rows || rows.length === 0) return 0;
+  let inserted = 0;
+
+  // 1. Get existing column set in D1 SQLite table to avoid "no such column" errors
+  let existingColumns = new Set<string>();
+  try {
+    const colInfo = await executeD1Query(`PRAGMA table_info(${tableName})`);
+    if (Array.isArray(colInfo.results)) {
+      colInfo.results.forEach((c: any) => existingColumns.add(String(c.name).toLowerCase()));
+    }
+  } catch (pragmaErr) {
+    // Table might be custom or dynamic
+  }
+
+  for (const rawRow of rows) {
+    if (!rawRow || typeof rawRow !== 'object') continue;
+    const row = { ...rawRow };
+
+    // Standardize & Guarantee Warehouse GRN fields
+    if (tableName === 'warehouse_grn') {
+      const candidateGrn =
+        row.grn_number ||
+        row.grnNumber ||
+        row.no_grn ||
+        row.grn_no ||
+        row.nomor_grn ||
+        row.grn ||
+        row.incoming_number ||
+        row.no_kedatangan ||
+        row.penerimaan_no ||
+        row.doc_no ||
+        row.no_dokumen ||
+        row.reference_no ||
+        row.batch_number ||
+        row.batchNo ||
+        row.no_batch ||
+        row.code;
+
+      if (candidateGrn && String(candidateGrn).trim() !== '' && candidateGrn !== 'null' && candidateGrn !== 'undefined') {
+        row.grn_number = String(candidateGrn).trim();
+      } else {
+        const yr = new Date().getFullYear();
+        const mo = String(new Date().getMonth() + 1).padStart(2, '0');
+        const suffix = row.id
+          ? String(row.id).replace(/[^a-zA-Z0-9]/g, '').slice(-6).toUpperCase()
+          : Math.random().toString(36).substring(2, 8).toUpperCase();
+        row.grn_number = `GRN-${yr}${mo}-${suffix}`;
+      }
+
+      // Material fields
+      if (row.materialType && !row.material_type) row.material_type = row.materialType;
+      if (row.materialId && !row.material_id) row.material_id = row.materialId;
+      if (row.materialCode && !row.material_code) row.material_code = row.materialCode;
+      if (row.kode_material && !row.material_code) row.material_code = row.kode_material;
+      if (row.kode_bahan && !row.material_code) row.material_code = row.kode_bahan;
+      if (row.materialName && !row.material_name) row.material_name = row.materialName;
+      if (row.nama_material && !row.material_name) row.material_name = row.nama_material;
+      if (row.nama_bahan && !row.material_name) row.material_name = row.nama_bahan;
+
+      if (!row.material_code || String(row.material_code).trim() === '' || row.material_code === 'null') {
+        row.material_code = row.code || row.item_code || 'RM-UNKNOWN';
+      }
+      if (!row.material_name || String(row.material_name).trim() === '' || row.material_name === 'null') {
+        row.material_name = row.name || row.item_name || row.material_code || 'Material Tanpa Nama';
+      }
+
+      // Warehouse receipt fields
+      if (row.poNumber && !row.po_number) row.po_number = row.poNumber;
+      if (row.purchase_order_number && !row.po_number) row.po_number = row.purchase_order_number;
+      if (row.no_po && !row.po_number) row.po_number = row.no_po;
+      if (row.batchNumber && !row.batch_number) row.batch_number = row.batchNumber;
+      if (row.no_batch && !row.batch_number) row.batch_number = row.no_batch;
+      if (row.receivedDate && !row.received_date) row.received_date = row.receivedDate;
+      if (row.tgl_terima && !row.received_date) row.received_date = row.tgl_terima;
+      if (row.tanggal_terima && !row.received_date) row.received_date = row.tanggal_terima;
+
+      if (!row.received_date || String(row.received_date).trim() === '' || row.received_date === 'null') {
+        row.received_date = row.date || (row.created_at ? String(row.created_at).substring(0, 10) : new Date().toISOString().substring(0, 10));
+      }
+
+      if (row.quantityReceived !== undefined && row.quantity_received === undefined) row.quantity_received = row.quantityReceived;
+      if (row.qty && row.quantity_received === undefined) row.quantity_received = row.qty;
+      if (row.quantity_received === undefined || row.quantity_received === null || isNaN(Number(row.quantity_received))) {
+        row.quantity_received = Number(row.qty || row.quantity || 0);
+      }
+
+      if (row.currentQuantity !== undefined && row.current_quantity === undefined) row.current_quantity = row.currentQuantity;
+      if (row.containerCount !== undefined && row.container_count === undefined) row.container_count = row.containerCount;
+      if (row.containerType && !row.container_type) row.container_type = row.containerType;
+      if (row.storageLocation && !row.storage_location) row.storage_location = row.storageLocation;
+      if (row.lokasi && !row.storage_location) row.storage_location = row.lokasi;
+      if (row.qcStatus && !row.qc_status) row.qc_status = row.qcStatus;
+      if (row.status && !row.qc_status) row.qc_status = row.status;
+      if (!row.qc_status || String(row.qc_status).trim() === '') row.qc_status = 'QUARANTINE';
+      if (row.receivedBy && !row.received_by) row.received_by = row.receivedBy;
+      if (!row.unit || String(row.unit).trim() === '' || row.unit === 'null') row.unit = row.satuan || 'kg';
+      if (!row.material_type || String(row.material_type).trim() === '') {
+        row.material_type = row.type || (row.material_code?.startsWith('PM-') ? 'packaging' : 'raw');
+      }
+    }
+
+    // Standardize User Profile fields
+    if (tableName === 'profiles') {
+      if (row.full_name && !row.name) row.name = row.full_name;
+      if (row.nama && !row.name) row.name = row.nama;
+      if (row.nama_lengkap && !row.name) row.name = row.nama_lengkap;
+      if (!row.name || String(row.name).trim() === '' || row.name === 'null') {
+        row.name = row.email ? row.email.split('@')[0] : 'Karyawan';
+      }
+      if (row.departemen && !row.department) row.department = row.departemen;
+      if (!row.department) row.department = 'rnd';
+      if (row.jabatan && !row.position) row.position = row.jabatan;
+      if (row.peran && !row.role) row.role = row.peran;
+      if (!row.role) row.role = 'staff';
+      if (!row.password) row.password = 'laras123';
+      if (!row.nik || String(row.nik).trim() === '' || row.nik === 'null') {
+        row.nik = row.employee_id || row.no_induk || (row.email ? row.email.split('@')[0] : `USR${Math.random().toString(36).substring(2, 7).toUpperCase()}`);
+      }
+    }
+
+    // Standardize Raw Materials
+    if (tableName === 'raw_materials') {
+      if (!row.code || String(row.code).trim() === '' || row.code === 'null') {
+        row.code = row.kode_material || row.kode_bahan || row.material_code || `RM-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+      if (!row.name || String(row.name).trim() === '' || row.name === 'null') {
+        row.name = row.nama_material || row.nama_bahan || row.material_name || row.code;
+      }
+    }
+
+    // Standardize Packaging Materials
+    if (tableName === 'packaging_materials') {
+      if (!row.code || String(row.code).trim() === '' || row.code === 'null') {
+        row.code = row.kode_kemas || row.material_code || `PM-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+      if (!row.name || String(row.name).trim() === '' || row.name === 'null') {
+        row.name = row.nama_kemas || row.material_name || row.code;
+      }
+    }
+
+    // Standardize Products
+    if (tableName === 'products') {
+      if (!row.code || String(row.code).trim() === '' || row.code === 'null') {
+        row.code = row.product_code || row.kode_produk || `PROD-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+      if (!row.name || String(row.name).trim() === '' || row.name === 'null') {
+        row.name = row.product_name || row.nama_produk || row.code;
+      }
+      if (!row.product_code) row.product_code = row.code;
+    }
+
+    // Standardize Bulk Formulations
+    if (tableName === 'bulk_formulations') {
+      if (!row.formula_code || String(row.formula_code).trim() === '' || row.formula_code === 'null') {
+        row.formula_code = row.code || row.kode_formula || `FORM-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+      if (!row.formula_name || String(row.formula_name).trim() === '' || row.formula_name === 'null') {
+        row.formula_name = row.name || row.nama_formula || row.formula_code;
+      }
+    }
+
+    // Standardize QC Reports
+    if (tableName === 'qc_inspection_reports') {
+      if (!row.report_number || String(row.report_number).trim() === '' || row.report_number === 'null') {
+        row.report_number = row.no_laporan || row.report_no || `QC-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+    }
+
+    // Standardize Deviations
+    if (tableName === 'deviations') {
+      if (!row.deviation_number || String(row.deviation_number).trim() === '' || row.deviation_number === 'null') {
+        row.deviation_number = row.no_penyimpangan || `DEV-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      }
+    }
+
+    // Default ID if missing
+    if (!row.id) {
+      row.id = `${tableName}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    }
+
+    // 2. Ensure all columns in this row exist in D1 SQLite table
+    for (const key of Object.keys(row)) {
+      const lowerKey = key.toLowerCase();
+      if (!existingColumns.has(lowerKey)) {
+        try {
+          await executeD1Query(`ALTER TABLE ${tableName} ADD COLUMN "${key}" TEXT;`);
+          existingColumns.add(lowerKey);
+        } catch (addErr) {
+          // column may already exist or cannot be added
+        }
+      }
+    }
+
+    if (tableName === 'warehouse_grn' && (!row.grn_number || String(row.grn_number).trim() === '' || row.grn_number === 'null')) {
+      const yr = new Date().getFullYear();
+      const mo = String(new Date().getMonth() + 1).padStart(2, '0');
+      const suffix = row.id
+        ? String(row.id).replace(/[^a-zA-Z0-9]/g, '').slice(-6).toUpperCase()
+        : Math.random().toString(36).substring(2, 8).toUpperCase();
+      row.grn_number = `GRN-${yr}${mo}-${suffix}`;
+    }
+
+    const keys = Object.keys(row).filter((k) => row[k] !== undefined && row[k] !== null);
+    const placeholders = keys.map(() => '?').join(', ');
+    const params = keys.map((k) => {
+      const val = row[k];
+      if (val !== null && typeof val === 'object' && !(val instanceof Date)) {
+        return JSON.stringify(val);
+      }
+      return val;
+    });
+
+    const conflictCol = tableName === 'profiles' ? 'nik' : tableName === 'warehouse_grn' ? 'grn_number' : (row.code ? 'code' : 'id');
+    const updateSets = keys
+      .filter((k) => k !== conflictCol)
+      .map((k) => `"${k}" = excluded."${k}"`)
+      .join(', ');
+
+    const sql = `
+      INSERT INTO ${tableName} (${keys.map((k) => `"${k}"`).join(', ')})
+      VALUES (${placeholders})
+      ON CONFLICT(${conflictCol}) DO UPDATE SET ${updateSets || `"${conflictCol}" = excluded."${conflictCol}"`}
+    `;
+
+    try {
+      await executeD1Query(sql, params);
+      inserted++;
+    } catch (e: any) {
+      // Fallback: try simple INSERT OR REPLACE INTO without ON CONFLICT clause
+      try {
+        const simpleSql = `INSERT OR REPLACE INTO ${tableName} (${keys.map((k) => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+        await executeD1Query(simpleSql, params);
+        inserted++;
+      } catch (e2: any) {
+        console.warn(`[Migrate D1] Failed row in ${tableName}:`, e.message, e2.message);
+      }
+    }
+  }
+
+  return inserted;
+}
+
+// 1. Test connection & count records in remote Supabase (with OpenAPI schema discovery, alias search & RLS detection)
+app.post('/api/supabase/test', async (req: Request, res: Response) => {
+  const { supabaseUrl, supabaseKey } = req.body;
+  if (!supabaseUrl || !supabaseKey) {
+    return res.status(400).json({
+      success: false,
+      error: 'Supabase URL dan API Key wajib diisi.',
+    });
+  }
+
+  const cleanUrl = String(supabaseUrl).trim().replace(/\/+$/, '');
+  const cleanKey = String(supabaseKey).trim();
+  const startTime = Date.now();
+
+  // Inspect JWT to check if it's 'anon', 'service_role', or new key format
+  let keyRole = 'unknown';
+  try {
+    const parts = cleanKey.split('.');
+    if (parts.length >= 2) {
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+      keyRole = payload.role || 'unknown';
+    } else if (cleanKey.startsWith('sb_publishable_') || cleanKey.startsWith('anon_')) {
+      keyRole = 'anon';
+    } else if (cleanKey.startsWith('sb_secret_') || cleanKey.startsWith('service_role_')) {
+      keyRole = 'service_role';
+    }
+  } catch (jwtErr) {
+    // ignore
+  }
+
+  try {
+    // 1. Try to fetch OpenAPI specification from PostgREST to discover all actual tables in their Supabase
+    let openApiTables: string[] = [];
+    try {
+      const openApiRes = await fetch(`${cleanUrl}/rest/v1/`, {
+        method: 'GET',
+        headers: {
+          apikey: cleanKey,
+          Authorization: `Bearer ${cleanKey}`,
+          Accept: 'application/openapi+json, application/json',
+        },
+      });
+
+      if (openApiRes.ok) {
+        const spec: any = await openApiRes.json();
+        if (spec.paths) {
+          openApiTables = Object.keys(spec.paths)
+            .map((p) => p.replace(/^\//, ''))
+            .filter((p) => p.length > 0 && !p.startsWith('rpc/'));
+        } else if (spec.definitions) {
+          openApiTables = Object.keys(spec.definitions);
+        }
+      }
+    } catch (e) {
+      // Continue with candidate tables
+    }
+
+    // 2. Check Supabase Auth Users directly (using Admin API)
+    let authUsersCount = 0;
+    let authUsersSupported = false;
+    try {
+      const authRes = await fetch(`${cleanUrl}/auth/v1/admin/users?per_page=1000`, {
+        method: 'GET',
+        headers: {
+          apikey: cleanKey,
+          Authorization: `Bearer ${cleanKey}`,
+        },
+      });
+      if (authRes.ok) {
+        const authData: any = await authRes.json();
+        if (authData && Array.isArray(authData.users)) {
+          authUsersCount = authData.users.length;
+          authUsersSupported = true;
+        }
+      }
+    } catch (authErr) {
+      // Ignored if anon key doesn't have admin access
+    }
+
+    // 3. Compile tables to probe (Known canonicals + discovered + common Indonesian/English aliases)
+    const candidateAliases = [
+      'grn', 'goods_receipt', 'incoming_goods', 'kedatangan_barang', 'penerimaan_barang', 'kedatangan',
+      'materials', 'bahan_baku', 'raw_material',
+      'packaging', 'bahan_kemas', 'kemasan',
+      'users', 'user_profiles', 'karyawan', 'employees',
+      'formulas', 'formula',
+      'produk', 'finished_goods',
+      'mutasi_stok', 'inventory',
+    ];
+
+    const tablesToProbe = Array.from(new Set([...KNOWN_SUPABASE_TABLES, ...openApiTables, ...candidateAliases]));
+
+    const tableCounts: Record<string, number> = {};
+    const tableMapping: Record<string, string> = {}; // Supabase table -> Target D1 table
+    let totalRecords = 0;
+    const errors: Record<string, string> = {};
+    const debugInfo: Record<string, any> = {};
+
+    let isQuotaExceeded = false;
+    let quotaErrorDetails = '';
+
+    for (const tbl of tablesToProbe) {
+      try {
+        const fetchUrl = `${cleanUrl}/rest/v1/${tbl}?select=*&limit=1`;
+        const cfRes = await fetch(fetchUrl, {
+          method: 'GET',
+          headers: {
+            apikey: cleanKey,
+            Authorization: `Bearer ${cleanKey}`,
+            Prefer: 'count=exact',
+            'Range-Unit': 'items',
+          },
+        });
+
+        const status = cfRes.status;
+        const contentRange = cfRes.headers.get('content-range') || cfRes.headers.get('Content-Range') || '';
+        debugInfo[tbl] = { status, contentRange };
+
+        if (status === 200 || status === 206) {
+          let count = 0;
+          const match = contentRange.match(/\/(\d+)/);
+
+          if (match && match[1]) {
+            count = parseInt(match[1], 10);
+          } else {
+            // Fallback: try fetching up to 100 rows to count
+            try {
+              const probeRes = await fetch(`${cleanUrl}/rest/v1/${tbl}?select=*&limit=100`, {
+                method: 'GET',
+                headers: {
+                  apikey: cleanKey,
+                  Authorization: `Bearer ${cleanKey}`,
+                },
+              });
+              if (probeRes.ok) {
+                const body: any = await probeRes.json();
+                if (Array.isArray(body)) {
+                  count = body.length;
+                }
+              }
+            } catch (pErr) {}
+          }
+
+          tableCounts[tbl] = count;
+          totalRecords += count;
+
+          // Determine target D1 table
+          const targetD1 = REVERSE_ALIAS_MAP[tbl.toLowerCase()] || (KNOWN_SUPABASE_TABLES.includes(tbl) ? tbl : tbl);
+          tableMapping[tbl] = targetD1;
+        } else if (status === 402) {
+          isQuotaExceeded = true;
+          try {
+            const body402: any = await cfRes.json();
+            quotaErrorDetails = body402?.message || 'exceed_egress_quota';
+          } catch (e) {}
+          tableCounts[tbl] = -3; // Restricted due to quota
+          debugInfo[tbl].status = 'exceed_egress_quota';
+        } else if (status === 404) {
+          // Table doesn't exist in Supabase
+          if (KNOWN_SUPABASE_TABLES.includes(tbl)) {
+            tableCounts[tbl] = -1; // Not found
+          }
+          debugInfo[tbl].status = 'not_found';
+        } else if (status === 401 || status === 403) {
+          tableCounts[tbl] = -2; // Forbidden / RLS Blocked
+          errors[tbl] = `Akses ditolak (${status}): Diblokir oleh RLS atau Key tidak memiliki izin.`;
+          debugInfo[tbl].status = 'forbidden_rls';
+        }
+      } catch (tblErr: any) {
+        errors[tbl] = tblErr.message;
+        debugInfo[tbl] = { error: tblErr.message };
+      }
+    }
+
+    // If Supabase Auth users were found, include them
+    if (authUsersSupported && authUsersCount > 0) {
+      tableCounts['auth.users'] = authUsersCount;
+      tableMapping['auth.users'] = 'profiles';
+      totalRecords += authUsersCount;
+    }
+
+    const latencyMs = Date.now() - startTime;
+    const isAnonKey = keyRole === 'anon';
+    const isRlsSuspected = (isAnonKey && totalRecords === 0) || (keyRole !== 'service_role' && totalRecords === 0);
+
+    let warningMessage = undefined;
+    if (isQuotaExceeded) {
+      warningMessage =
+        `⚠️ PROYEK DIBATASI OLEH SUPABASE (HTTP 402: EXCEED EGRESS QUOTA):\n` +
+        `Supabase memblokir akses API publik untuk proyek ini karena penggunaan bandwidth transfer data (egress quota) telah melampaui batas kuota gratis.\n` +
+        `Data Anda TIDAK hilang dan masih aman 100% di database PostgreSQL!\n` +
+        `Cara Mengambil Data Tanpa Biaya:\n` +
+        `1. Buka dashboard web Supabase (supabase.com) > buka proyek Anda > klik menu "SQL Editor".\n` +
+        `2. Jalankan query: SELECT json_agg(t) FROM (SELECT * FROM warehouse_grn) t; (atau tabel profiles / master lainnya).\n` +
+        `3. Salin hasil JSON tersebut, lalu tempelkan ke tab "Upload / Tempel SQL & JSON" di aplikasi ini. Data akan langsung terimpor ke Cloudflare D1 dalam hitungan detik!\n` +
+        `Atau opsi lain: Buka Project Settings > Billing di dashboard Supabase untuk menaikkan spend cap agar API langsung aktif kembali.`;
+    } else if (isRlsSuspected) {
+      warningMessage =
+        'PERHATIAN (RLS AKTIF): Anda terdeteksi menggunakan "anon key" (kunci publik) dan seluruh tabel mengembalikan 0 baris. Supabase mengaktifkan Row Level Security (RLS) secara otomatis yang menyembunyikan semua baris data untuk anon key. Mohon gunakan "service_role" (secret) key dari Dashboard Supabase > Project Settings > API > Project API keys > service_role (klik Reveal), atau nonaktifkan RLS sementara di SQL Editor.';
+    } else if (totalRecords === 0) {
+      const activeTables = Object.keys(tableCounts).filter((t) => tableCounts[t] >= 0);
+      warningMessage = `Terhubung (kunci: ${keyRole}), namun tabel yang diperiksa mengembalikan 0 baris (${activeTables.join(', ') || 'tidak ada tabel'}). Pastikan nama tabel di Supabase Anda sesuai, atau gunakan tab "Upload / Tempel SQL / JSON" atau fitur "Uji Tabel Kustom" di bawah.`;
+    }
+
+    // Filter discoveredTables to only tables that actually exist (count >= 0)
+    const existingDiscovered = Object.keys(tableCounts).filter((t) => tableCounts[t] > 0 || tableCounts[t] === 0);
+
+    res.json({
+      success: true,
+      isQuotaExceeded,
+      message: isQuotaExceeded
+        ? 'Terhubung ke Supabase, namun API dibatasi oleh Supabase (HTTP 402: exceed_egress_quota).'
+        : totalRecords > 0
+        ? `Terhubung ke Supabase! Ditemukan total ${totalRecords} baris data.`
+        : isRlsSuspected
+        ? 'Terhubung ke Supabase, namun terdeteksi 0 baris data karena pembatasan RLS (Row Level Security).'
+        : 'Terhubung ke Supabase, namun tidak ditemukan baris data di tabel yang diperiksa.',
+      latencyMs,
+      totalRecords,
+      tableCounts,
+      tableMapping,
+      keyRole,
+      warningMessage,
+      discoveredTables: existingDiscovered,
+      debugInfo,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: `Gagal menghubungi Supabase: ${err.message}`,
+    });
+  }
+});
+
+// 2. Inspect a specific custom table name in Supabase (with column names and sample row preview)
+app.post('/api/supabase/inspect-table', async (req: Request, res: Response) => {
+  const { supabaseUrl, supabaseKey, tableName } = req.body;
+  if (!supabaseUrl || !supabaseKey || !tableName) {
+    return res.status(400).json({ success: false, error: 'supabaseUrl, supabaseKey, dan tableName wajib diisi.' });
+  }
+
+  const cleanUrl = String(supabaseUrl).trim().replace(/\/+$/, '');
+  const cleanKey = String(supabaseKey).trim();
+  const cleanTable = String(tableName).trim();
+
+  try {
+    const fetchUrl = `${cleanUrl}/rest/v1/${cleanTable}?select=*&limit=5`;
+    const resRemote = await fetch(fetchUrl, {
+      method: 'GET',
+      headers: {
+        apikey: cleanKey,
+        Authorization: `Bearer ${cleanKey}`,
+        Prefer: 'count=exact',
+        'Range-Unit': 'items',
+      },
+    });
+
+    const status = resRemote.status;
+    const contentRange = resRemote.headers.get('content-range') || resRemote.headers.get('Content-Range') || '';
+
+    if (status === 402) {
+      let bodyMsg = 'exceed_egress_quota';
+      try {
+        const body402 = await resRemote.json();
+        bodyMsg = body402.message || bodyMsg;
+      } catch (e) {}
+
+      return res.json({
+        success: false,
+        status,
+        isQuotaExceeded: true,
+        message: `Proyek Supabase Anda sedang DIBATASI (HTTP 402: ${bodyMsg}). Kuota transfer data gratis telah melampaui batas paket. Data Anda di database tetap aman 100%. Salin data langsung via Supabase SQL Editor ke tab Upload/Tempel.`,
+        count: 0,
+      });
+    }
+
+    if (status === 404) {
+      return res.json({
+        success: false,
+        status,
+        message: `Tabel "${cleanTable}" tidak ditemukan di Supabase (HTTP 404). Periksa kembali ejaan nama tabel.`,
+        count: 0,
+      });
+    }
+
+    if (status === 401 || status === 403) {
+      return res.json({
+        success: false,
+        status,
+        message: `Akses ke tabel "${cleanTable}" ditolak (HTTP ${status}). RLS aktif atau API key tidak memiliki izin. Gunakan service_role key.`,
+        count: 0,
+      });
+    }
+
+    const rows: any = await resRemote.json();
+    let count = 0;
+    const match = contentRange.match(/\/(\d+)/);
+    if (match && match[1]) {
+      count = parseInt(match[1], 10);
+    } else if (Array.isArray(rows)) {
+      count = rows.length;
+    }
+
+    const columns = Array.isArray(rows) && rows.length > 0 ? Object.keys(rows[0]) : [];
+    const targetD1Table = REVERSE_ALIAS_MAP[cleanTable.toLowerCase()] || cleanTable;
+
+    res.json({
+      success: true,
+      status,
+      tableName: cleanTable,
+      count,
+      columns,
+      sampleRows: Array.isArray(rows) ? rows.slice(0, 3) : [],
+      targetD1Table,
+      message: count > 0
+        ? `Tabel "${cleanTable}" ditemukan! Berisi ${count} baris data.`
+        : `Tabel "${cleanTable}" terhubung tetapi berisi 0 baris (mungkin kosong atau dibatasi RLS).`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Direct migration: Fetch all records from Supabase and insert into D1
+app.post('/api/supabase/migrate-all', async (req: Request, res: Response) => {
+  const {
+    supabaseUrl,
+    supabaseKey,
+    wipeExisting = false,
+    tables = KNOWN_SUPABASE_TABLES,
+    tableMapping: customMapping = {},
+  } = req.body;
+
+  if (!supabaseUrl || !supabaseKey) {
+    return res.status(400).json({
+      success: false,
+      error: 'Supabase URL dan API Key wajib diisi.',
+    });
+  }
+
+  const cleanUrl = String(supabaseUrl).trim().replace(/\/+$/, '');
+  const cleanKey = String(supabaseKey).trim();
+  const summary: Record<string, { targetTable: string; fetched: number; inserted: number; status: string; error?: string }> = {};
+
+  try {
+    for (const sourceTable of tables) {
+      // Determine canonical target D1 table
+      const targetTable =
+        customMapping[sourceTable] ||
+        REVERSE_ALIAS_MAP[sourceTable.toLowerCase()] ||
+        (KNOWN_SUPABASE_TABLES.includes(sourceTable) ? sourceTable : sourceTable);
+
+      summary[sourceTable] = { targetTable, fetched: 0, inserted: 0, status: 'pending' };
+
+      // Optional wipe existing data first (Clean Overwrite)
+      if (wipeExisting) {
+        try {
+          await executeD1Query(`DELETE FROM ${targetTable}`);
+        } catch (wipeErr: any) {
+          console.warn(`[Migrate D1] Failed to clean ${targetTable}:`, wipeErr.message);
+        }
+      }
+
+      let allRows: any[] = [];
+
+      // SPECIAL CASE: Supabase Auth Users Migration
+      if (sourceTable === 'auth.users') {
+        try {
+          const authRes = await fetch(`${cleanUrl}/auth/v1/admin/users?per_page=1000`, {
+            method: 'GET',
+            headers: {
+              apikey: cleanKey,
+              Authorization: `Bearer ${cleanKey}`,
+            },
+          });
+          if (authRes.ok) {
+            const authData: any = await authRes.json();
+            if (authData && Array.isArray(authData.users)) {
+              allRows = authData.users.map((u: any) => ({
+                id: u.id,
+                nik: u.user_metadata?.nik || u.email?.split('@')[0] || `USR${u.id.substring(0, 5).toUpperCase()}`,
+                name: u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split('@')[0] || 'User',
+                email: u.email,
+                department: u.user_metadata?.department || 'rnd',
+                role: u.user_metadata?.role || 'staff',
+                position: u.user_metadata?.position || '',
+                password: u.user_metadata?.password || 'laras123',
+                created_at: u.created_at,
+              }));
+            }
+          }
+        } catch (authErr: any) {
+          summary[sourceTable].status = 'error';
+          summary[sourceTable].error = authErr.message;
+        }
+      } else {
+        // STANDARD TABLE: Fetch all rows from Supabase with pagination
+        let offset = 0;
+        const batchSize = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+          try {
+            const fetchUrl = `${cleanUrl}/rest/v1/${sourceTable}?select=*`;
+            const cfRes = await fetch(fetchUrl, {
+              method: 'GET',
+              headers: {
+                apikey: cleanKey,
+                Authorization: `Bearer ${cleanKey}`,
+                Range: `${offset}-${offset + batchSize - 1}`,
+              },
+            });
+
+            if (!cfRes.ok) {
+              summary[sourceTable].status = cfRes.status === 404 ? 'skipped_not_found' : 'error';
+              summary[sourceTable].error = `HTTP ${cfRes.status}: ${cfRes.statusText}`;
+              hasMore = false;
+              break;
+            }
+
+            const rows: any = await cfRes.json();
+            if (Array.isArray(rows) && rows.length > 0) {
+              allRows = allRows.concat(rows);
+              offset += rows.length;
+              if (rows.length < batchSize) {
+                hasMore = false;
+              }
+            } else {
+              hasMore = false;
+            }
+          } catch (fetchErr: any) {
+            summary[sourceTable].status = 'error';
+            summary[sourceTable].error = fetchErr.message;
+            hasMore = false;
+            break;
+          }
+        }
+      }
+
+      summary[sourceTable].fetched = allRows.length;
+
+      if (allRows.length > 0) {
+        const insertedCount = await insertRecordsIntoD1Table(targetTable, allRows);
+        summary[sourceTable].inserted = insertedCount;
+        summary[sourceTable].status = 'success';
+      } else if (summary[sourceTable].status === 'pending') {
+        summary[sourceTable].status = 'empty';
+      }
+    }
+
+    const totalInserted = Object.values(summary).reduce((acc, curr) => acc + curr.inserted, 0);
+
+    res.json({
+      success: true,
+      message: `Migrasi selesai! Total ${totalInserted} baris data berhasil ditransfer ke database Cloudflare D1.`,
+      totalInserted,
+      summary,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: `Kegagalan selama proses migrasi: ${err.message}`,
+      summary,
+    });
+  }
+});
+
+// 4. Import from exported JSON file
+app.post('/api/supabase/import-json', async (req: Request, res: Response) => {
+  const { tableName, rows, wipeExisting = false } = req.body;
+
+  if (!tableName || !Array.isArray(rows)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Nama tabel dan array data rows wajib disertakan.',
+    });
+  }
+
+  const targetTable = REVERSE_ALIAS_MAP[tableName.toLowerCase()] || tableName;
+
+  try {
+    if (wipeExisting) {
+      await executeD1Query(`DELETE FROM ${targetTable}`);
+    }
+
+    const inserted = await insertRecordsIntoD1Table(targetTable, rows);
+    res.json({
+      success: true,
+      message: `Berhasil mengimpor ${inserted} baris data ke tabel ${targetTable}.`,
+      inserted,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Import from raw SQL dump (with smart PostgreSQL COPY block parser and SQLite compatibility)
+app.post('/api/supabase/import-sql', async (req: Request, res: Response) => {
+  const { sqlContent, wipeExisting = false } = req.body;
+  if (!sqlContent || typeof sqlContent !== 'string') {
+    return res.status(400).json({ success: false, error: 'SQL content string wajib diisi.' });
+  }
+
+  const trimmed = sqlContent.trim();
+
+  // Auto-detect JSON pasted in SQL tab
+  if (trimmed.startsWith('[') || (trimmed.startsWith('{') && trimmed.includes('"data"'))) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const rows = Array.isArray(parsed) ? parsed : parsed.data || parsed.results || [];
+      if (Array.isArray(rows) && rows.length > 0) {
+        // Guess table from fields
+        let detectedTable = 'warehouse_grn';
+        if (rows[0].nik || rows[0].role) detectedTable = 'profiles';
+        else if (rows[0].product_name || rows[0].bpom_notification_number) detectedTable = 'products';
+        else if (rows[0].material_type === 'raw' || rows[0].cas_number) detectedTable = 'raw_materials';
+
+        const inserted = await insertRecordsIntoD1Table(detectedTable, rows);
+        return res.json({
+          success: true,
+          message: `Terdeteksi format JSON! Berhasil mengimpor ${inserted} baris data ke tabel ${detectedTable}.`,
+          executed: inserted,
+          errors: 0,
+        });
+      }
+    } catch (jsonErr) {
+      // Continue with SQL parsing
+    }
+  }
+
+  try {
+    let executed = 0;
+    let ignored = 0;
+    let errors = 0;
+    const errorDetails: string[] = [];
+
+    // 1. Parse PostgreSQL COPY ... FROM stdin blocks
+    // Format: COPY [public.]<table_name> (col1, col2, ...) FROM stdin;\n<row1>\n<row2>\n\.
+    const copyRegex = /COPY\s+(?:["']?public["']?\.)?["']?([a-zA-Z0-9_]+)["']?\s*\(([^)]+)\)\s+FROM\s+stdin;([\s\S]*?)(?:\\\.|\n\s*\n)/gi;
+    let matchCopy: RegExpExecArray | null;
+
+    while ((matchCopy = copyRegex.exec(sqlContent)) !== null) {
+      const rawTable = matchCopy[1].trim();
+      const rawCols = matchCopy[2].split(',').map((c) => c.trim().replace(/["']/g, ''));
+      const dataBlock = matchCopy[3];
+
+      const targetTable = REVERSE_ALIAS_MAP[rawTable.toLowerCase()] || rawTable;
+      const lines = dataBlock.split('\n').map((l) => l.trim()).filter((l) => l.length > 0 && l !== '\\.');
+
+      const parsedRows: any[] = [];
+      for (const line of lines) {
+        const values = line.split('\t');
+        const rowObj: Record<string, any> = {};
+        rawCols.forEach((col, idx) => {
+          let val = values[idx];
+          if (val === undefined || val === '\\N') {
+            rowObj[col] = null;
+          } else {
+            // Unescape common pg escapes
+            rowObj[col] = val.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\\\/g, '\\');
+          }
+        });
+        parsedRows.push(rowObj);
+      }
+
+      if (parsedRows.length > 0) {
+        try {
+          const inserted = await insertRecordsIntoD1Table(targetTable, parsedRows);
+          executed += inserted;
+        } catch (copyErr: any) {
+          errors++;
+          errorDetails.push(`[Gagal COPY ${targetTable}]: ${copyErr.message}`);
+        }
+      }
+    }
+
+    // 2. Remove the COPY blocks from the SQL string so they don't break statement splitting
+    let cleanedSql = sqlContent.replace(copyRegex, '');
+
+    // Clean schema prefixes and double quotes
+    cleanedSql = cleanedSql
+      .replace(/["']?public["']?\./gi, '')
+      .replace(/::[a-zA-Z0-9_]+/g, ''); // strip ::uuid, ::text, etc.
+
+    // Directives to safely ignore (PostgreSQL-specific)
+    const pgIgnoredPatterns = [
+      /^SET\s+/i,
+      /^SELECT\s+pg_catalog\./i,
+      /^CREATE\s+EXTENSION/i,
+      /^ALTER\s+TABLE\s+.*?\s+OWNER\s+TO/i,
+      /^ALTER\s+SEQUENCE/i,
+      /^CREATE\s+SEQUENCE/i,
+      /^GRANT\s+/i,
+      /^REVOKE\s+/i,
+      /^COMMENT\s+ON/i,
+      /^CREATE\s+POLICY/i,
+      /^ALTER\s+TABLE\s+.*?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/i,
+      /^BEGIN/i,
+      /^COMMIT/i,
+    ];
+
+    // Split statements safely by semicolon
+    const rawStatements = cleanedSql
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !s.startsWith('--') && !s.startsWith('/*'));
+
+    for (const rawStmt of rawStatements) {
+      const isIgnored = pgIgnoredPatterns.some((pat) => pat.test(rawStmt));
+      if (isIgnored) {
+        ignored++;
+        continue;
+      }
+
+      // Convert common PostgreSQL constructs to SQLite
+      let stmt = rawStmt
+        .replace(/DEFAULT\s+gen_random_uuid\(\)/gi, "DEFAULT (lower(hex(randomblob(16))))")
+        .replace(/DEFAULT\s+uuid_generate_v4\(\)/gi, "DEFAULT (lower(hex(randomblob(16))))")
+        .replace(/DEFAULT\s+now\(\)/gi, "DEFAULT (datetime('now'))")
+        .replace(/timestamp\s+with\s+time\s+zone/gi, 'TEXT')
+        .replace(/timestamptz/gi, 'TEXT')
+        .replace(/uuid/gi, 'TEXT');
+
+      try {
+        await executeD1Query(stmt);
+        executed++;
+      } catch (e: any) {
+        // If it's an INSERT into a known alias, rewrite table name and retry
+        let retried = false;
+        for (const [alias, canonical] of Object.entries(REVERSE_ALIAS_MAP)) {
+          if (stmt.toLowerCase().includes(`insert into ${alias}`)) {
+            try {
+              const rewritten = stmt.replace(new RegExp(`insert into ${alias}`, 'i'), `INSERT INTO ${canonical}`);
+              await executeD1Query(rewritten);
+              executed++;
+              retried = true;
+              break;
+            } catch (rErr) {}
+          }
+        }
+
+        if (!retried) {
+          errors++;
+          const snippet = stmt.replace(/\s+/g, ' ').substring(0, 90);
+          errorDetails.push(`[${e.message}]: "${snippet}..."`);
+        }
+      }
+    }
+
+    const message = executed > 0
+      ? `Eksekusi SQL/COPY selesai: ${executed} perintah/baris data berhasil diimpor (${ignored} konfigurasi Postgres dilewati, ${errors} error).`
+      : `Tidak ada data yang berhasil dieksekusi (${errors} error, ${ignored} konfigurasi Postgres dilewati). Silakan gunakan tab Koneksi Langsung atau periksa error di bawah.`;
+
+    res.json({
+      success: executed > 0 || (errors === 0 && ignored > 0),
+      message,
+      executed,
+      ignored,
+      errors,
+      errorDetails: errorDetails.slice(0, 10),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Health Check
 app.get('/api/health', async (req: Request, res: Response) => {
   try {
@@ -990,8 +2012,12 @@ app.post('/api/grn', async (req: Request, res: Response) => {
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `;
+    const yr = new Date().getFullYear();
+    const mo = String(new Date().getMonth() + 1).padStart(2, '0');
+    const genGrn = `GRN-${yr}${mo}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const finalGrnNumber = b.grn_number || b.grnNumber || genGrn;
     await executeD1Query(sql, [
-      newId, b.grn_number || b.grnNumber, b.material_type || b.materialType || 'raw',
+      newId, finalGrnNumber, b.material_type || b.materialType || 'raw',
       b.material_id || b.materialId || null, b.material_code || b.materialCode,
       b.material_name || b.materialName, b.manufacturer || '-', b.distributor || '-',
       b.delivery_note_number || b.deliveryNoteNumber || '-', b.purchase_order_number || b.po_number || b.poNumber || '-',

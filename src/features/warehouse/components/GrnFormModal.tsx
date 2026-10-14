@@ -40,7 +40,7 @@ interface GrnFormModalProps {
   onClose: () => void;
   rawMaterials: RawMaterial[];
   packagingMaterials: PackagingMaterial[];
-  onSave: (record: Omit<GrnRecord, 'id' | 'createdAt' | 'grnNumber'>) => Promise<void>;
+  onSave: (record: Omit<GrnRecord, 'id' | 'createdAt'> & { grnNumber?: string }) => Promise<void>;
   userName?: string;
 }
 
@@ -834,7 +834,7 @@ export const GrnFormModal: React.FC<GrnFormModalProps> = ({
                         <Cloud className="w-3 h-3 text-blue-600" />
                         <span>Google Drive Perusahaan: Aktif</span>
                       </span>
-                      {(user?.role === 'admin' || user?.role === 'superadmin' || user?.department === 'management') && (
+                      {(user?.role === 'admin' || user?.department === 'management') && (
                         <button
                           type="button"
                           onClick={handleSwitchDriveAccount}

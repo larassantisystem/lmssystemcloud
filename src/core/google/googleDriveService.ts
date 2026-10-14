@@ -504,7 +504,7 @@ export const googleDriveService = {
           Authorization: `Bearer ${token}`,
           'Content-Type': `multipart/related; boundary=${boundary}`,
         },
-        body: bodyData,
+        body: bodyData as any,
       }
     );
 

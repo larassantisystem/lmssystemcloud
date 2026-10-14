@@ -31,7 +31,7 @@ export const CloudflareWarehouseSqlModal: React.FC<CloudflareWarehouseSqlModalPr
   const runAudit = async () => {
     setAuditLoading(true);
     try {
-      const res = await warehouseService.auditSupabaseStatus();
+      const res = await warehouseService.auditDatabaseStatus();
       setAuditResult({
         isConfigured: true,
         tableExists: res.tableExists,

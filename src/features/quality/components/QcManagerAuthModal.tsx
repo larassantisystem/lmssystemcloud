@@ -194,7 +194,7 @@ export const QcManagerAuthModal: React.FC<QcManagerAuthModalProps> = ({
               <div>
                 <span className="text-slate-400 block">Rencana Sampling:</span>
                 <span className="font-semibold text-slate-800">
-                  {report.samplingInfo.sampleSize} {report.samplingInfo.sampleUnit} ({report.samplingInfo.sampleContainers} wadah)
+                  {report.samplingInfo.sampleSizeQuantity} {report.samplingInfo.sampleUnit} ({report.samplingInfo.totalContainers} wadah)
                 </span>
               </div>
               <div>

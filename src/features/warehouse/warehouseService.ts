@@ -275,9 +275,9 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
     resolvedQcStatus = d.qc_status || d.qcStatus || 'QUARANTINE';
   }
 
-  let coaAtt = d.coa_attachment || d.coaAttachment || qcPayload?.coaAttachment || '';
-  let driveFileId = (d as any).coa_drive_file_id || d.coaDriveFileId || qcPayload?.coaDriveFileId;
-  let driveViewLink = (d as any).coa_drive_view_link || d.coaDriveViewLink || qcPayload?.coaDriveViewLink;
+  let coaAtt = (d as any).coa_attachment || (d as any).coaAttachment || (qcPayload as any)?.coaAttachment || '';
+  let driveFileId = (d as any).coa_drive_file_id || (d as any).coaDriveFileId || (qcPayload as any)?.coaDriveFileId;
+  let driveViewLink = (d as any).coa_drive_view_link || (d as any).coaDriveViewLink || (qcPayload as any)?.coaDriveViewLink;
 
   // Auto-parse if coa_attachment contains a Drive link or JSON metadata
   if (coaAtt && typeof coaAtt === 'string') {
@@ -516,7 +516,7 @@ export const warehouseService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        let { data, error } = await withTimeout(
+        let { data, error }: { data: any; error: any } = await withTimeout(
           supabase
             .from('warehouse_grn')
             .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')

@@ -154,7 +154,7 @@ export const IpcInspectionReportPdfModal: React.FC<IpcInspectionReportPdfModalPr
   const effectiveDate = '01 OKT 2026';
   const replacesDocNumber = 'L-DQC-008-00';
 
-  const loggedInName = profile?.full_name || currentUser?.name || 'Staf QC Lab';
+  const loggedInName = profile?.name || currentUser?.name || 'Staf QC Lab';
   const loggedInNik = profile?.nik || currentUser?.nik || '-';
 
   const analystName = batch.staffSignature?.signerName || batch.analyst || loggedInName;
