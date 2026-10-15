@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { RawMaterial, QCParameter } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
@@ -101,7 +101,45 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
   const { user } = useAuth();
   const [searchRM, setSearchRM] = useState('');
   
-  // Search filter
+  // Server-side pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [serverItems, setServerItems] = useState<RawMaterial[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isServerPaged, setIsServerPaged] = useState<boolean>(false);
+  const [isLoadingPage, setIsLoadingPage] = useState<boolean>(false);
+
+  const fetchServerPage = useCallback(async (page: number, size: number, search: string) => {
+    setIsLoadingPage(true);
+    try {
+      const res = await materialService.getMaterialsPaginated({
+        page,
+        pageSize: size,
+        search,
+      });
+      setServerItems(res.items);
+      setTotalCount(res.totalCount);
+      setIsServerPaged(true);
+    } catch (e) {
+      console.warn('Error fetching paginated raw materials:', e);
+    } finally {
+      setIsLoadingPage(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchServerPage(currentPage, itemsPerPage, searchRM);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [currentPage, itemsPerPage, searchRM, fetchServerPage]);
+
+  // Reset to page 1 on search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchRM]);
+
+  // Fallback in-memory search filter
   const filteredRM = rawMaterials.filter(
     (rm) =>
       rm.name.toLowerCase().includes(searchRM.toLowerCase()) ||
@@ -110,17 +148,10 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
       (rm.manufacturer && rm.manufacturer.toLowerCase().includes(searchRM.toLowerCase()))
   );
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(50);
-  
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchRM]);
-
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredRM.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = isServerPaged ? serverItems : filteredRM.slice(indexOfFirstItem, indexOfLastItem);
+  const displayTotalCount = isServerPaged ? totalCount : filteredRM.length;
   
   // Modals visibility states
   const [showFormModal, setShowFormModal] = useState(false);
@@ -503,7 +534,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     }
 
     // Bagian B Validation
-    const cleanQcParams = rmQcParams.filter(p => p.name.trim() !== '');
+    const cleanQcParams = rmQcParams.filter(p => p.name?.trim());
     if (cleanQcParams.length === 0) {
       errors.push('Minimal 1 Parameter & Spesifikasi Analisa QC (Bagian B) wajib diisi.');
     }
@@ -582,7 +613,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
         return;
       }
 
-      const cleanQcParams = rmQcParams.filter(p => p.name.trim() !== '');
+      const cleanQcParams = rmQcParams.filter(p => p.name?.trim());
       const primaryCategory = rmCategories[0] || 'active';
 
       const newOrUpdatedRM: RawMaterial = {
@@ -1153,7 +1184,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
           </table>
           <Pagination
             currentPage={currentPage}
-            totalItems={filteredRM.length}
+            totalItems={displayTotalCount}
             itemsPerPage={itemsPerPage}
             onPageChange={setCurrentPage}
             onItemsPerPageChange={(items) => {
@@ -2040,7 +2071,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                     Live View Bagian B: Spesifikasi Mutu Analisa QC
                   </h5>
                   <span className="font-mono text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
-                    {rmQcParams.filter((p) => p.name.trim() !== '').length} Parameter Terdaftar
+                    {rmQcParams.filter((p) => p.name?.trim()).length} Parameter Terdaftar
                   </span>
                 </div>
 
@@ -2055,7 +2086,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-[11px]">
                       {rmQcParams
-                        .filter((p) => p.name.trim() !== '')
+                        .filter((p) => p.name?.trim())
                         .map((param, pIdx) => (
                           <tr key={pIdx} className="hover:bg-slate-50/60">
                             <td className="py-1.5 px-3 text-center font-mono text-slate-400 font-bold text-[10px]">

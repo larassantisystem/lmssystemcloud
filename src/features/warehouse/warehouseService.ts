@@ -1,5 +1,6 @@
 import { GrnRecord, GrnStats, GrnPaginatedQuery, GrnPaginatedResponse } from './types/grnTypes';
 import { supabase, isSupabaseConfigured } from '../../core/auth/supabaseClient';
+import * as supabaseClient from '../../core/auth/supabaseClient';
 import { calculateSamplingPlan } from '../quality/utils/milStd105e';
 import { packGrnNotes, unpackGrnNotes } from '../../core/utils/qcStorageSync';
 import { generateLotInternalNumber, normalizeLotNumber, calculateAutoRetestDate } from '../quality/utils/qcNumbering';
@@ -323,7 +324,7 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
     currentQuantity: Number(d.current_quantity || 0) > 0
       ? Number(d.current_quantity)
       : (Number(qcPayload?.currentQuantity || 0) > 0
-          ? Number(qcPayload.currentQuantity)
+          ? Number(qcPayload?.currentQuantity)
           : Number(d.quantity_received || d.quantityReceived || 0)),
     unit: d.unit || 'kg',
     containerCount: Number(d.container_count || d.containerCount || 1),
@@ -514,7 +515,38 @@ export const warehouseService = {
       return inMemoryGrnRecords;
     }
 
-    if (isSupabaseConfigured && supabase) {
+    // Prioritize Cloudflare D1
+    if (supabaseClient.isCloudflareConfigured) {
+      try {
+        // Fetch from D1 API
+        const response = await fetch('/api/d1/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+          sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 100', 
+          params: [] 
+        })
+        });
+        const data = await response.json();
+        if (data.results) {
+          const mapped = data.results.map((d: any) => ({
+             ...d,
+             grnNumber: d.grn_number,
+             materialType: d.material_type,
+             materialCode: d.material_code,
+             materialName: d.material_name,
+             // ... map other fields
+          })).map(mapDbRowToGrnRecord);
+          inMemoryGrnRecords = mapped;
+          lastGrnFetchTime = Date.now();
+          return mapped;
+        }
+      } catch (err) {
+        console.warn('[warehouseService] D1 fetch failed:', err);
+      }
+    }
+
+    if (false && isSupabaseConfigured && supabase) { // Disable Supabase
       try {
         let { data, error }: { data: any; error: any } = await withTimeout(
           supabase
@@ -522,7 +554,7 @@ export const warehouseService = {
             .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')
             .order('created_at', { ascending: false })
             .limit(100),
-          5000
+          10000
         );
 
         if (error && (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('schema cache'))) {
@@ -846,7 +878,9 @@ export const warehouseService = {
             : (matchedItem.currentQuantity !== undefined
                 ? Number(matchedItem.currentQuantity)
                 : Number(matchedItem.quantityReceived))),
-      qcPayload: updatedData.qcPayload !== undefined ? updatedData.qcPayload : (matchedItem.qcPayload || remotePayload),
+      qcPayload: updatedData.qcPayload !== undefined 
+        ? { ...updatedData.qcPayload, parameters: updatedData.qcPayload.parameters?.filter((p: any) => p.parameterName !== 'pH') } 
+        : (matchedItem.qcPayload || remotePayload),
     };
 
     if (isSupabaseConfigured && supabase) {

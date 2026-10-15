@@ -1,92 +1,73 @@
-# Rencana Implementasi: Direct Supabase Data Backup & Migration to D1
+# Rencana Implementasi: Optimasi Master Data dengan Server-Side Pagination & Query Projection
 
-Integrasi migrasi data langsung dari Supabase ke database Cloudflare D1 untuk mentransfer seluruh dataset perusahaan (User Profile, Riwayat Kedatangan Gudang/GRN, Bahan Baku, Bahan Kemas, Produk Jadi, dan Formula) tanpa perlu input ulang manual.
-
-### User Review & Critical Decisions
-
-> [!IMPORTANT]
-> Berdasarkan konfirmasi pada sesi tanya jawab sebelumnya:
-> - **Metode Transfer**: Menghubungkan langsung URL Proyek Supabase dan API Key (Anon / Service Role Key).
-> - **Cakupan Data**: Menyeluruh (Tabel `profiles`, `warehouse_grn`, `raw_materials`, `packaging_materials`, `products`, `bulk_formulations`, dan relasi terkait).
-> - **Strategi Penulisan**: Timpa bersih (Clean Wipe & Replace) agar seluruh data konsisten persis seperti di Supabase produksi.
-> - **Opsi Alternatif**: Disediakan tab sekunder untuk unggah file dump SQL / JSON backup Supabase secara offline jika API Supabase dibatasi firewall/IP whitelist.
+Dokumen ini menguraikan langkah-langkah implementasi server-side pagination, pemfilteran di level database, dan eliminasi full-table scan pada master data (Bahan Baku, Bahan Kemas, dan Produk).
 
 ---
 
-### 1. Overview & Core Concept
+## 1. Analisis Masalah Saat Ini
 
-- **Apa yang Dibangun**: Modal wizard *"Direct Supabase Migration & Backup Restorer"* yang memungkinkan administrator memasukkan kredensial proyek Supabase lama, memverifikasi koneksi, meninjau jumlah baris per tabel, dan mengeksekusi transfer data lengkap ke database Cloudflare D1 dalam satu klik.
-- **Pengguna Target**: Administrator Sistem, Manager RnD, Supervisor Gudang, dan QA/QC yang membutuhkan kesinambungan data master dan data transaksi riil.
-- **Nilai Tambah**: Menghindari input manual ribuan master data kemasan/bahan baku dan riwayat kedatangan GRN, serta memulihkan seluruh akun login karyawan secara instan.
-
----
-
-### 2. User Experience & Visual Design
-
-- **Alur Pengguna**:
-  1. Akses tombol **"Backup & Impor Data Supabase"** dari Menu Profil Admin di Header atau modul Pengaturan Database.
-  2. **Langkah 1 (Koneksi)**: Masukkan `Supabase Project URL` (contoh: `https://xxxx.supabase.co`) dan `Supabase API Key` (Anon Key atau Service Role Key).
-  3. **Langkah 2 (Pratinjau Data)**: Klik *"Uji & Hitung Baris Data"*. Sistem memeriksa koneksi dan menampilkan jumlah record per tabel secara real-time (`profiles`, `warehouse_grn`, `raw_materials`, `packaging_materials`, `products`, `bulk_formulations`).
-  4. **Langkah 3 (Eksekusi Migrasi)**: Pilih mode *"Timpa Bersih (Fresh Overwrite)"* dan klik *"Mulai Migrasi Penuh"*.
-  5. **Langkah 4 (Monitoring Real-time)**: Indikator progress bar dinamis dan log streaming menampilkan tabel yang sedang diproses baris demi baris hingga selesai 100%.
-- **Desain & Tipografi**:
-  - Tampilan modal bertingkat tunggal (*single elevation*) dengan palet warna slate gelap dan aksen emerald/indigo.
-  - Nilai angka dan counter tabel diformat menggunakan `tabular-nums font-mono`.
-  - Tidak ada pill badges dekoratif yang menumpuk; status ditampilkan melalui label teks ringkas dan indikator persentase yang jelas.
-  - Tab sekunder untuk cadangan manual: unggah file `.json` atau `.sql` hasil ekspor dari Supabase Studio.
+1. **Auto-Batching While Loop (Full Table Scan ke Memori)**:
+   - `materialService.ts` (`raw_materials`) dan `packagingService.ts` (`packaging_materials`) saat ini melakukan perulangan `while (hasMore)` dengan `limit(1000)` hingga **seluruh baris tabel** (ribuan row) terunduh ke RAM browser.
+   - Setiap kali halaman dibuka atau cache kedaluwarsa, ribuan baris dibaca ulang dari database.
+2. **Pengambilan Kolom JSON Berat**:
+   - Kolom `qc_parameters`, `technical_specifications`, dan `supplier_info` ikut terbaca untuk setiap baris di tabel ringkasan awal.
+3. **Pemuatan Berantai (*Fan-Out*) ke Modul Lain**:
+   - Modul Gudang (GRN), QC, dan Formula memanggil data master secara penuh hanya untuk mengisi opsi dropdown pencarian.
 
 ---
 
-### 3. Key Product Decisions & Trade-Offs
+## 2. Strategi Arsitektur & Perubahan
 
-- **Keputusan 1: Backend Server-Side Proxy untuk Eksekusi Transfer**
-  - *Pendekatan*: Request fetch ke Supabase dieksekusi di backend Express (`server.ts`), bukan di browser client.
-  - *Alasan*: Menghindari pembatasan CORS browser, melindungi API Key Supabase agar tidak bocor di network tab browser, dan mencegah timeout saat transfer data dalam jumlah ribuan baris.
-  - *Alternatif Ditolak*: Fetch langsung dari frontend React (rentan error CORS dan batas payload browser).
+### A. Server-Side Pagination pada Service Master Data
+- Menambahkan metode kueri terpaginasi di setiap service:
+  - `materialService.getMaterialsPaginated({ page, pageSize, search, category })`
+  - `packagingService.getPackagingMaterialsPaginated({ page, pageSize, search, type })`
+  - `productService.getProductsPaginated({ page, pageSize, search, category })`
+- Menggunakan klausul kueri efisien:
+  - `.select(...)` dengan kolom minimal untuk daftar tabel.
+  - `.range(offset, offset + pageSize - 1)` (hanya membaca 15–25 baris per halaman alih-alih ribuan).
+  - Filter pencarian langsung di database (`ilike` atau `.or(...)` pada `code` dan `name`).
 
-- **Keputusan 2: Penanganan Tipe Data JSON & Kolom Array**
-  - *Pendekatan*: Parsing otomatis pada kolom relasional kompleks (`categories`, `qc_parameters`, `permissions_json`, `packaging_bom`) menjadi string JSON standar SQLite sebelum disimpan di D1.
-  - *Alasan*: Memastikan kompatibilitas sempurna dengan mesin SQLite Cloudflare D1 tanpa kehilangan struktur array.
+### B. Pemisahan Endpoint/Metode untuk Dropdown & Lookups
+- Untuk formulir yang hanya membutuhkan referensi (seperti form GRN atau pilihan material):
+  - Disediakan metode ringan `searchMaterialOptions(query, limit = 20)` yang hanya mengembalikan `id, code, name` dengan batasan ketat.
+  - Menghindari pemuatan ribuan baris saat user hanya butuh memilih satu material.
+
+### C. Pembaruan Komponen Antarmuka (UI Tables & Lists)
+- Memperbarui tabel Master Data (`RawMaterialsList`, `PackagingMaterialsList`, `ProductList`):
+  - Mengintegrasikan server-side pagination dengan kontrol navigasi halaman (First, Prev, Page Numbers, Next, Last) serta informasi total item/halaman.
+  - Input pencarian menggunakan *debounce* (300-400ms) agar tidak memicu kueri beruntun pada setiap ketukan keyboard.
+  - Menampilkan skeleton / loading state yang halus saat beralih halaman.
+
+### D. Lazy Loading untuk Detail & Parameter QC
+- Detail lengkap (termasuk JSON `qc_parameters`) hanya diambil *on-demand* ketika modal detail atau formulir edit dibuka (`getMaterialById(id)` / `getPackagingMaterialById(id)`).
 
 ---
 
-### 4. Technical Architecture & Data Strategy
+## 3. Tahapan Eksekusi
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Client Frontend                        │
-│   (SupabaseMigrationModal.tsx + DashboardLayout.tsx)        │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ POST /api/supabase/test
-                               │ POST /api/supabase/migrate-all
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Express Backend (server.ts)              │
-│  - Endpoint verifikasi kredensial Supabase                  │
-│  - Pipeline ekstraksi data per tabel via PostgREST API      │
-│  - Parser normalisasi tipe data & JSON formatting           │
-└──────────────┬──────────────────────────────┬───────────────┘
-               │ Fetch PostgREST               │ SQL Batch Insert
-               ▼                               ▼
-┌─────────────────────────────┐  ┌────────────────────────────┐
-│      Remote Supabase DB     │  │   Cloudflare D1 Database   │
-│  - profiles                 │  │  - profiles                │
-│  - warehouse_grn            │  │  - warehouse_grn           │
-│  - raw_materials            │  │  - raw_materials           │
-│  - packaging_materials      │  │  - packaging_materials     │
-│  - products                 │  │  - products                │
-│  - bulk_formulations        │  │  - bulk_formulations       │
-└─────────────────────────────┘  └────────────────────────────┘
-```
+1. **Fase 1: Backend & Service Layer**
+   - Perbarui `materialService.ts`: buat `getMaterialsPaginated()` dan `searchMaterials()`.
+   - Perbarui `packagingService.ts`: buat `getPackagingMaterialsPaginated()` dan `searchPackagingMaterials()`.
+   - Perbarui `productService.ts`: buat `getProductsPaginated()` dan `searchProducts()`.
+   - Pertahankan metode lama dengan cache atau deprecation yang aman agar tidak merusak modul lain.
 
-#### Komponen Teknis yang Dikerjakan:
-1. **Backend Endpoint (`server.ts`)**:
-   - `POST /api/supabase/test`: Menguji koneksi dan menghitung jumlah record pada setiap tabel di Supabase.
-   - `POST /api/supabase/migrate-all`: Menjalankan pipeline migrasi data terstruktur dengan batch transactions dan opsi `wipeExisting: true`.
-2. **Frontend UI (`src/components/admin/SupabaseMigrationModal.tsx`)**:
-   - Form input kredensial Supabase (`supabaseUrl`, `supabaseKey`).
-   - Kartu pratinjau tabel dengan jumlah baris terdeteksi.
-   - Progress bar multi-tahap dan jendela log monitor.
-   - Tab cadangan upload JSON/SQL backup.
-3. **Penyambungan Komponen (`src/core/ui-components/DashboardLayout.tsx`)**:
-   - Memastikan tombol pemanggilan modal aktif di profil admin dan header navigasi.
+2. **Fase 2: Komponen UI Master Data**
+   - Hubungkan `RawMaterialsList` / modul bahan baku ke pagination server.
+   - Hubungkan `PackagingMaterialsList` / modul bahan kemas ke pagination server.
+   - Hubungkan `ProductList` / modul produk ke pagination server.
+   - Pastikan pagination responsif dan ramah pengguna.
+
+3. **Fase 3: Optimasi Dropdown & Pemanggilan Antar-Modul**
+   - Periksa pemanggilan di modul Gudang (GRN) dan QC agar menggunakan pencarian ringkas/terbatas alih-alih `getAll()`.
+
+4. **Fase 4: Verifikasi & Pengujian**
+   - Jalankan `compile_applet` dan `lint_applet` untuk memastikan tidak ada pemutusan dependensi atau error tipe TypeScript.
+   - Verifikasi bahwa jumlah baris yang dibaca berkurang drastis dari ribuan baris menjadi hanya sejumlah halaman aktif (misal 20-50 baris).
+
+---
+
+## 4. Hasil yang Diharapkan
+- **Pengurangan Rows Read**: Penurunan >95% pada setiap akses awal halaman master data.
+- **Waktu Muat (Load Time)**: Jauh lebih cepat dan hemat memori pada browser pengguna.
+- **Skalabilitas**: Sistem tetap ringan dan cepat meskipun data bertambah hingga puluhan ribu baris.

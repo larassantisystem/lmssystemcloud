@@ -17,6 +17,19 @@ if (typeof window !== 'undefined' && window.localStorage) {
 }
 
 export const packagingService = {
+  getPackagingMaterialDetail: async (id: string): Promise<PackagingMaterial | null> => {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const { data, error } = await supabase
+      .from('packaging_materials')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error) {
+      console.error('[packagingService] Error fetching detail:', error);
+      return null;
+    }
+    return data;
+  },
   invalidateCache: () => {
     lastFetchTime = 0;
   },
@@ -56,6 +69,143 @@ export const packagingService = {
     return inMemoryPackaging;
   },
 
+  getPackagingMaterialsCount: async (): Promise<number> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { count, error } = await supabase
+          .from('packaging_materials')
+          .select('id', { count: 'exact', head: true });
+        if (!error && typeof count === 'number') {
+          return count;
+        }
+      } catch (err) {
+        console.warn('[packagingService] count error:', err);
+      }
+    }
+    return inMemoryPackaging.length;
+  },
+
+  getPackagingMaterialsPaginated: async (params: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    type?: string;
+  }): Promise<{ items: PackagingMaterial[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = Math.max(1, params.pageSize || 50);
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'string' && val.trim()) {
+        try {
+          const parsed = JSON.parse(val);
+          if (Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+      return fallback;
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase
+          .from('packaging_materials')
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, reorder_point, qc_parameters, last_modified_by, last_modified_at', { count: 'exact' });
+
+        if (params.search && params.search.trim()) {
+          const s = params.search.trim();
+          query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%,supplier.ilike.%${s}%,manufacturer.ilike.%${s}%`);
+        }
+
+        if (params.type && params.type !== 'all') {
+          query = query.eq('type', params.type);
+        }
+
+        query = query.order('code', { ascending: true }).range(from, to);
+
+        const { data, count, error } = await query;
+
+        if (!error && data) {
+          const mapped: PackagingMaterial[] = data.map((p: any) => ({
+            id: p.id,
+            code: p.code,
+            specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
+            name: p.name,
+            type: p.type || 'primary',
+            unit: p.unit || 'Pcs',
+            unitCapacityGrams: p.unit_capacity_grams ?? p.unitCapacityGrams,
+            supplier: p.supplier || p.manufacturer || '',
+            manufacturer: p.manufacturer || p.supplier || '',
+            storageLocation: p.storage_location || p.storageLocation || '',
+            storageConditions: p.storage_conditions || p.storageConditions || '',
+            qcParameters: parseJsonArray(p.qc_parameters || p.qcParameters, []),
+            reorderPoint: p.reorder_point ?? p.reorderPoint ?? 100,
+            lastModifiedBy: p.last_modified_by || p.lastModifiedBy,
+            lastModifiedAt: p.last_modified_at || p.lastModifiedAt,
+          }));
+
+          const totalCount = count !== undefined && count !== null ? count : mapped.length;
+          return {
+            items: mapped,
+            totalCount,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalCount / pageSize) || 1,
+          };
+        }
+      } catch (err) {
+        console.warn('[packagingService] paginated query exception:', err);
+      }
+    }
+
+    // Fallback in-memory
+    let filtered = inMemoryPackaging;
+    if (params.search && params.search.trim()) {
+      const s = params.search.trim().toLowerCase();
+      filtered = filtered.filter((p) => p.name.toLowerCase().includes(s) || p.code.toLowerCase().includes(s));
+    }
+    if (params.type && params.type !== 'all') {
+      filtered = filtered.filter((p) => p.type === params.type);
+    }
+    const items = filtered.slice(from, to + 1);
+    return {
+      items,
+      totalCount: filtered.length,
+      page,
+      pageSize,
+      totalPages: Math.ceil(filtered.length / pageSize) || 1,
+    };
+  },
+
+  searchPackagingMaterials: async (term: string, limit = 20): Promise<Array<{ id: string; code: string; name: string; type: string }>> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase
+          .from('packaging_materials')
+          .select('id, code, name, type')
+          .order('code', { ascending: true })
+          .limit(limit);
+
+        if (term && term.trim()) {
+          const s = term.trim();
+          query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%`);
+        }
+
+        const { data, error } = await query;
+        if (!error && data) {
+          return data;
+        }
+      } catch (err) {
+        console.warn('[packagingService] search error:', err);
+      }
+    }
+    return inMemoryPackaging
+      .filter((p) => !term || p.name.toLowerCase().includes(term.toLowerCase()) || p.code.toLowerCase().includes(term.toLowerCase()))
+      .slice(0, limit)
+      .map((p) => ({ id: p.id, code: p.code, name: p.name, type: p.type }));
+  },
+
   getPackagingMaterials: async (forceRefresh = false): Promise<PackagingMaterial[]> => {
     const isCacheValid = !forceRefresh && inMemoryPackaging.length > 0 && (Date.now() - lastFetchTime < CACHE_TTL_MS);
     if (isCacheValid) {
@@ -64,40 +214,14 @@ export const packagingService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        const allFetchedRows: any[] = [];
-        const pageSize = 1000;
-        let page = 0;
-        let hasMore = true;
+        // Optimized single fetch (limit 300) without multi-thousand unbounded while loop
+        const { data, error } = await supabase
+          .from('packaging_materials')
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
+          .order('code', { ascending: true })
+          .limit(300);
 
-        // Auto-batching pagination: mengambil seluruh baris (termasuk >1000 baris) melewati batas PostgREST
-        while (hasMore) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-
-          const { data, error } = await supabase
-            .from('packaging_materials')
-            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
-            .order('code', { ascending: true })
-            .range(from, to);
-
-          if (error) {
-            console.warn('[Supabase Audit] Error fetching packaging_materials page', page, error.message);
-            break;
-          }
-
-          if (data && data.length > 0) {
-            allFetchedRows.push(...data);
-            if (data.length < pageSize) {
-              hasMore = false;
-            } else {
-              page++;
-            }
-          } else {
-            hasMore = false;
-          }
-        }
-
-        if (allFetchedRows.length > 0) {
+        if (!error && data && data.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
             if (Array.isArray(val)) return val;
             if (typeof val === 'string' && val.trim()) {
@@ -109,7 +233,7 @@ export const packagingService = {
             return fallback;
           };
 
-          const mapped: PackagingMaterial[] = allFetchedRows.map((p: any) => ({
+          const mapped: PackagingMaterial[] = data.map((p: any) => ({
             id: p.id,
             code: p.code,
             specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,

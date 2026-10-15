@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, Fragment } from 'react';
+import React, { useState, useRef, useEffect, useCallback, Fragment } from 'react';
 import * as XLSX from 'xlsx';
 import { Product, ProductVariant, BulkFormulation, PackagingMaterial, QCParameter } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
@@ -147,6 +147,36 @@ export const RndProductsTab: React.FC<RndProductsTabProps> = ({
   // Pagination State for Master Produk Jadi (Default 50 per page)
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(50);
+  const [serverProducts, setServerProducts] = useState<Product[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isServerPaged, setIsServerPaged] = useState<boolean>(false);
+  const [isLoadingPage, setIsLoadingPage] = useState<boolean>(false);
+
+  const fetchServerPage = useCallback(async (page: number, size: number, search: string, expFilter: 'all' | 'expiring_soon') => {
+    setIsLoadingPage(true);
+    try {
+      const res = await productService.getProductsPaginated({
+        page,
+        pageSize: size,
+        search,
+        expFilter,
+      });
+      setServerProducts(res.items);
+      setTotalCount(res.totalCount);
+      setIsServerPaged(true);
+    } catch (e) {
+      console.warn('Error fetching paginated products:', e);
+    } finally {
+      setIsLoadingPage(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchServerPage(currentPage, itemsPerPage, searchQuery, activeExpFilterTab);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [currentPage, itemsPerPage, searchQuery, activeExpFilterTab, fetchServerPage]);
 
   // Auto reset page to 1 when filters or page size change
   useEffect(() => {
@@ -1150,10 +1180,11 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
   const totalVariantsCount = products.reduce((sum, p) => sum + p.variants.length, 0);
 
   // Pagination Calculations (Default 50 per page)
-  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage) || 1;
+  const displayTotal = isServerPaged ? totalCount : filteredProducts.length;
+  const totalPages = Math.ceil(displayTotal / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = Math.min(startIndex + itemsPerPage, filteredProducts.length);
-  const paginatedProducts = filteredProducts.slice(startIndex, endIndex);
+  const endIndex = Math.min(startIndex + itemsPerPage, displayTotal);
+  const paginatedProducts = isServerPaged ? serverProducts : filteredProducts.slice(startIndex, endIndex);
 
   return (
     <div className="space-y-6 font-sans">
@@ -1545,7 +1576,8 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
                 </div>
                 <span className="text-slate-300 font-mono hidden sm:inline">|</span>
                 <span className="text-[11px] font-semibold text-slate-700">
-                  Menampilkan <span className="font-bold text-purple-700">{filteredProducts.length === 0 ? 0 : startIndex + 1}</span> - <span className="font-bold text-purple-700">{endIndex}</span> dari <span className="font-bold text-slate-900">{filteredProducts.length}</span> Master Produk Jadi
+                  Menampilkan <span className="font-bold text-purple-700">{displayTotal === 0 ? 0 : startIndex + 1}</span> - <span className="font-bold text-purple-700">{endIndex}</span> dari <span className="font-bold text-slate-900">{displayTotal}</span> Master Produk Jadi
+                  {isLoadingPage && <span className="ml-1.5 text-purple-600 animate-pulse text-[10px]">(Memuat...)</span>}
                 </span>
               </div>
 

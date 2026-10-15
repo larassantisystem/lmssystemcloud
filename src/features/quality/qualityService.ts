@@ -132,6 +132,9 @@ export const qualityService = {
 
       // Exact criteria from Master Bagian B (zero hardcoded defaults)
       const effectiveParamTemplates = resolvedParams;
+      if (effectiveParamTemplates.length > 0) {
+        grn.qcParametersCount = effectiveParamTemplates.length;
+      }
 
       if (!existingReport) {
         // Calculate sampling plan
@@ -163,9 +166,6 @@ export const qualityService = {
 
         // Restore remote QC payload if available from Supabase notes
         if (grn.qcPayload) {
-          if (grn.qcPayload.parameters && Array.isArray(grn.qcPayload.parameters) && grn.qcPayload.parameters.length > 0) {
-            parameters = grn.qcPayload.parameters;
-          }
           staffDecision = grn.qcPayload.staffDecision;
           staffNotes = grn.qcPayload.staffNotes || '';
           staffSignature = grn.qcPayload.staffSignature;
@@ -177,6 +177,23 @@ export const qualityService = {
           retestDate = grn.qcPayload.retestDate;
         }
 
+        if (effectiveParamTemplates.length > 0) {
+          const currentSavedParams = grn.qcPayload?.parameters || (existingReport as any)?.parameters || [];
+          parameters = effectiveParamTemplates.map((templateItem, idx) => {
+            const matchedExisting = currentSavedParams.find(
+              (p: any) => p.parameterName?.trim().toLowerCase() === templateItem.name.trim().toLowerCase()
+            );
+            return {
+              id: matchedExisting?.id || `param-${Date.now()}-${idx}`,
+              parameterName: templateItem.name,
+              specification: templateItem.spec,
+              resultValue: matchedExisting?.resultValue || '',
+              isCompliant: matchedExisting?.isCompliant ?? true,
+              notes: matchedExisting?.notes || '',
+            };
+          });
+        } 
+        
         if (!retestDate && grn.materialType === 'raw') {
           retestDate = grn.retestDate || calculateAutoRetestDate('raw', grn.expiryDate, grn.receivedDate);
         }
@@ -735,7 +752,24 @@ export const qualityService = {
       report.lotInternalNumber
     );
 
-    report.parameters = parameters;
+    // Re-resolve master parameters to ensure strictly current master data
+    const packagingMaterials = await packagingService.getPackagingMaterials(true);
+    const rawMaterials = await materialService.getMaterials(true);
+    
+    let masterParams: Array<{ name: string; spec: string }> = [];
+    if (report.materialType === 'packaging') {
+      const pm = packagingMaterials.find(m => m.code === report.materialCode || m.name === report.materialName);
+      if (pm?.qcParameters) masterParams = pm.qcParameters.filter(p => p.name).map(p => ({ name: p.name!, spec: p.specification || '' }));
+    } else {
+      const rm = rawMaterials.find(m => m.code === report.materialCode || m.name === report.materialName);
+      if (rm?.qcParameters) masterParams = rm.qcParameters.filter(p => p.name).map(p => ({ name: p.name!, spec: p.specification || '' }));
+    }
+
+    // Filter submitted parameters to ONLY those in masterParams
+    report.parameters = parameters.filter(p => 
+      masterParams.some(mp => mp.name.trim().toLowerCase() === p.parameterName.trim().toLowerCase())
+    );
+
     report.staffDecision = staffDecision;
     report.staffNotes = staffNotes || '';
     if (actualSampleSize !== undefined && actualSampleSize !== null && !isNaN(Number(actualSampleSize))) {

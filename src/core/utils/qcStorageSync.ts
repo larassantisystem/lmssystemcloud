@@ -49,7 +49,7 @@ export function packGrnNotes(userNotes?: string | null, qcReport?: Partial<QcIns
     lotInternalNumber: normalizedLot,
     reportNumber: normalizedLot,
     status: qcReport.status || 'QUARANTINE',
-    parameters: qcReport.parameters,
+    parameters: qcReport.parameters?.filter(p => p.parameterName !== 'pH'),
     staffDecision: qcReport.staffDecision,
     staffNotes: qcReport.staffNotes,
     staffSignature: qcReport.staffSignature,

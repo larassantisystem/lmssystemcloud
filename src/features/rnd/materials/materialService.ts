@@ -56,6 +56,217 @@ export const materialService = {
     return inMemoryRawMaterials;
   },
 
+  getMaterialsCount: async (): Promise<number> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { count, error } = await supabase
+          .from('raw_materials')
+          .select('id', { count: 'exact', head: true });
+        if (!error && typeof count === 'number') {
+          return count;
+        }
+      } catch (err) {
+        console.warn('[materialService] count error:', err);
+      }
+    }
+    return inMemoryRawMaterials.length;
+  },
+
+  getMaterialsPaginated: async (params: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    category?: string;
+  }): Promise<{ items: RawMaterial[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = Math.max(1, params.pageSize || 50);
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+      if (Array.isArray(val)) return val;
+      if (typeof val === 'string' && val.trim()) {
+        try {
+          const parsed = JSON.parse(val);
+          if (Array.isArray(parsed)) return parsed;
+        } catch {}
+      }
+      return fallback;
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase
+          .from('raw_materials')
+          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at', { count: 'exact' });
+
+        if (params.search && params.search.trim()) {
+          const s = params.search.trim();
+          query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%,chemical_name.ilike.%${s}%,manufacturer.ilike.%${s}%`);
+        }
+
+        if (params.category && params.category !== 'all') {
+          query = query.or(`category.eq.${params.category},categories.ilike.%${params.category}%`);
+        }
+
+        query = query.order('code', { ascending: true }).range(from, to);
+
+        const { data, count, error } = await query;
+
+        if (!error && data) {
+          const mapped: RawMaterial[] = data.map((m: any) => {
+            const rawCats = parseJsonArray<string>(m.categories, []);
+            const resolvedCategories = rawCats.length > 0 
+              ? rawCats 
+              : (m.category ? [m.category] : ['active']);
+
+            return {
+              id: m.id,
+              code: m.code,
+              specNumber: m.spec_number || m.specNumber || `SP-BB-${m.code}`,
+              name: m.name,
+              chemicalName: m.chemical_name || m.chemicalName || '',
+              category: m.category || resolvedCategories[0] || 'active',
+              categories: resolvedCategories,
+              otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
+              storageConditions: m.storage_conditions || m.storageConditions || '',
+              sdsDocNumber: m.sds_doc_number || m.sdsDocNumber || '',
+              sdsFileUrl: m.sds_file_url || m.sdsFileUrl,
+              sdsFileName: m.sds_file_name || m.sdsFileName,
+              approvedSubstitutes: parseJsonArray(m.approved_substitutes || m.approvedSubstitutes, []),
+              manufacturer: m.manufacturer || '',
+              qcParameters: parseJsonArray(m.qc_parameters || m.qcParameters, []),
+              supplierLeadTimeDays: m.supplier_lead_time_days ?? m.supplierLeadTimeDays ?? 14,
+              reorderPoint: m.reorder_point ?? m.reorderPoint ?? 50,
+              lastModifiedBy: m.last_modified_by || m.lastModifiedBy,
+              lastModifiedAt: m.last_modified_at || m.lastModifiedAt,
+            };
+          });
+
+          const totalCount = count !== undefined && count !== null ? count : mapped.length;
+          return {
+            items: mapped,
+            totalCount,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalCount / pageSize) || 1,
+          };
+        }
+      } catch (err) {
+        console.warn('[materialService] paginated query exception:', err);
+      }
+    }
+
+    // Fallback in-memory
+    let filtered = inMemoryRawMaterials;
+    if (params.search && params.search.trim()) {
+      const s = params.search.trim().toLowerCase();
+      filtered = filtered.filter(
+        (m) =>
+          m.name.toLowerCase().includes(s) ||
+          m.code.toLowerCase().includes(s) ||
+          m.chemicalName.toLowerCase().includes(s) ||
+          (m.manufacturer && m.manufacturer.toLowerCase().includes(s))
+      );
+    }
+    if (params.category && params.category !== 'all') {
+      filtered = filtered.filter((m) => m.category === params.category || (m.categories && m.categories.includes(params.category!)));
+    }
+    const items = filtered.slice(from, to + 1);
+    return {
+      items,
+      totalCount: filtered.length,
+      page,
+      pageSize,
+      totalPages: Math.ceil(filtered.length / pageSize) || 1,
+    };
+  },
+
+  getMaterialById: async (id: string): Promise<RawMaterial | null> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('raw_materials')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string' && val.trim()) {
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return parsed;
+              } catch {}
+            }
+            return fallback;
+          };
+          const rawCats = parseJsonArray<string>(data.categories, []);
+          const resolvedCategories = rawCats.length > 0 ? rawCats : (data.category ? [data.category] : ['active']);
+
+          return {
+            id: data.id,
+            code: data.code,
+            specNumber: data.spec_number || `SP-BB-${data.code}`,
+            name: data.name,
+            chemicalName: data.chemical_name || '',
+            category: data.category || resolvedCategories[0] || 'active',
+            categories: resolvedCategories,
+            otherCategorySpecification: data.other_category_specification,
+            storageConditions: data.storage_conditions || '',
+            sdsDocNumber: data.sds_doc_number || '',
+            sdsFileUrl: data.sds_file_url,
+            sdsFileName: data.sds_file_name,
+            approvedSubstitutes: parseJsonArray(data.approved_substitutes, []),
+            manufacturer: data.manufacturer || '',
+            qcParameters: parseJsonArray(data.qc_parameters, []),
+            supplierLeadTimeDays: data.supplier_lead_time_days ?? 14,
+            reorderPoint: data.reorder_point ?? 50,
+            lastModifiedBy: data.last_modified_by,
+            lastModifiedAt: data.last_modified_at,
+          };
+        }
+      } catch (err) {
+        console.warn('[materialService] getMaterialById exception:', err);
+      }
+    }
+    return inMemoryRawMaterials.find((m) => m.id === id) || null;
+  },
+
+  searchMaterials: async (term: string, limit = 20): Promise<Array<{ id: string; code: string; name: string; chemicalName: string }>> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase
+          .from('raw_materials')
+          .select('id, code, name, chemical_name')
+          .order('code', { ascending: true })
+          .limit(limit);
+
+        if (term && term.trim()) {
+          const s = term.trim();
+          query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%,chemical_name.ilike.%${s}%`);
+        }
+
+        const { data, error } = await query;
+        if (!error && data) {
+          return data.map((d: any) => ({
+            id: d.id,
+            code: d.code,
+            name: d.name,
+            chemicalName: d.chemical_name || '',
+          }));
+        }
+      } catch (err) {
+        console.warn('[materialService] search error:', err);
+      }
+    }
+    return inMemoryRawMaterials
+      .filter((m) => !term || m.name.toLowerCase().includes(term.toLowerCase()) || m.code.toLowerCase().includes(term.toLowerCase()))
+      .slice(0, limit)
+      .map((m) => ({ id: m.id, code: m.code, name: m.name, chemicalName: m.chemicalName }));
+  },
+
   getMaterials: async (forceRefresh = false): Promise<RawMaterial[]> => {
     const isCacheValid = !forceRefresh && inMemoryRawMaterials.length > 0 && (Date.now() - lastFetchTime < CACHE_TTL_MS);
     if (isCacheValid) {
@@ -64,40 +275,14 @@ export const materialService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        const allFetchedRows: any[] = [];
-        const pageSize = 1000;
-        let page = 0;
-        let hasMore = true;
+        // Optimized single fetch (limit 300) without multi-thousand unbounded while loop
+        const { data, error } = await supabase
+          .from('raw_materials')
+          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
+          .order('code', { ascending: true })
+          .limit(300);
 
-        // Auto-batching pagination: mengambil seluruh baris (termasuk jika >1000 baris) melewati batas PostgREST
-        while (hasMore) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-
-          const { data, error } = await supabase
-            .from('raw_materials')
-            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
-            .order('code', { ascending: true })
-            .range(from, to);
-
-          if (error) {
-            console.warn('[Supabase Audit] Error fetching raw_materials page', page, error.message);
-            break;
-          }
-
-          if (data && data.length > 0) {
-            allFetchedRows.push(...data);
-            if (data.length < pageSize) {
-              hasMore = false;
-            } else {
-              page++;
-            }
-          } else {
-            hasMore = false;
-          }
-        }
-
-        if (allFetchedRows.length > 0) {
+        if (!error && data && data.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
             if (Array.isArray(val)) return val;
             if (typeof val === 'string' && val.trim()) {
@@ -109,7 +294,7 @@ export const materialService = {
             return fallback;
           };
 
-          const mapped: RawMaterial[] = allFetchedRows.map((m: any) => {
+          const mapped: RawMaterial[] = data.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
               ? rawCats 

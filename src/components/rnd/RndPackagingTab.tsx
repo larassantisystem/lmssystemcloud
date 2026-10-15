@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PackagingMaterial, QCParameter } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
 import { canWriteModule } from '../../core/auth/permissionGuard';
 import { authService } from '../../core/auth/authService';
+import { packagingService } from '../../features/rnd/materials/packagingService';
 import { ensureUUID, generateUUID } from '../../utils/uuid';
 import { auditLogger } from '../../core/utils/auditLogger';
 import * as XLSX from 'xlsx';
@@ -161,8 +162,43 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
   // Pagination states
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [serverItems, setServerItems] = useState<PackagingMaterial[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isServerPaged, setIsServerPaged] = useState<boolean>(false);
+  const [isLoadingPage, setIsLoadingPage] = useState<boolean>(false);
 
-  // Filtered PM
+  const fetchServerPage = useCallback(async (page: number, size: number, search: string, type: string) => {
+    setIsLoadingPage(true);
+    try {
+      const res = await packagingService.getPackagingMaterialsPaginated({
+        page,
+        pageSize: size,
+        search,
+        type,
+      });
+      setServerItems(res.items);
+      setTotalCount(res.totalCount);
+      setIsServerPaged(true);
+    } catch (e) {
+      console.warn('Error fetching paginated packaging materials:', e);
+    } finally {
+      setIsLoadingPage(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchServerPage(currentPage, itemsPerPage, searchPM, selectedTypeFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [currentPage, itemsPerPage, searchPM, selectedTypeFilter, fetchServerPage]);
+
+  // Reset to page 1 on search or filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchPM, selectedTypeFilter]);
+
+  // Fallback Filtered PM (in-memory)
   const filteredPM = packagingMaterials.filter((pm) => {
     const matchesSearch =
       pm.name.toLowerCase().includes(searchPM.toLowerCase()) ||
@@ -175,10 +211,11 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
     return matchesSearch && matchesType;
   });
 
-  // Pagination slice
+  // Current items: server-paged if available, otherwise sliced client-side
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredPM.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = isServerPaged ? serverItems : filteredPM.slice(indexOfFirstItem, indexOfLastItem);
+  const displayTotalCount = isServerPaged ? totalCount : filteredPM.length;
 
   // Open Add Modal
   const openAddPMModal = () => {
@@ -246,7 +283,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
     if (!pmSupplier.trim()) errors.push('Supplier wajib diisi.');
     if (!pmStorage.trim()) errors.push('Kondisi Penyimpanan Kemasan wajib diisi.');
 
-    const cleanQcParams = pmQcParams.filter((p) => p.name.trim() !== '');
+    const cleanQcParams = pmQcParams.filter((p) => p.name?.trim());
     if (cleanQcParams.length === 0) {
       errors.push('Minimal 1 Parameter & Spesifikasi Analisa QC (Bagian B) wajib diisi.');
     }
@@ -281,7 +318,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
         return;
       }
 
-      const cleanQcParams = pmQcParams.filter((p) => p.name.trim() !== '');
+      const cleanQcParams = pmQcParams.filter((p) => p.name?.trim());
 
       const newOrUpdatedPM: PackagingMaterial = {
         id: editingPM ? ensureUUID(editingPM.id) : generateUUID(),
@@ -730,10 +767,8 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
 
           {/* Counter Badge */}
           <div className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-[11px] font-mono font-bold whitespace-nowrap">
-            <span>Total: {packagingMaterials.length} Item</span>
-            {filteredPM.length !== packagingMaterials.length && (
-              <span className="text-[10px] text-purple-600">({filteredPM.length})</span>
-            )}
+            <span>Total: {displayTotalCount} Item</span>
+            {isLoadingPage && <span className="text-[10px] text-purple-500 animate-pulse">(Memuat...)</span>}
           </div>
         </div>
 
@@ -881,7 +916,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
         <div className="px-3 pb-1.5">
           <Pagination
             currentPage={currentPage}
-            totalItems={filteredPM.length}
+            totalItems={displayTotalCount}
             itemsPerPage={itemsPerPage}
             onPageChange={setCurrentPage}
             onItemsPerPageChange={(items) => {
@@ -1280,7 +1315,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
 
                 <div className="pt-3 border-t border-slate-200/80">
                   <span className="block text-[10px] font-extrabold text-purple-900 uppercase tracking-wider mb-2">
-                    Bagian B: Spesifikasi Mutu Analisa QC Bahan Kemas ({pmQcParams.filter((p) => p.name.trim()).length} Kriteria)
+                    Bagian B: Spesifikasi Mutu Analisa QC Bahan Kemas ({pmQcParams.filter((p) => p.name?.trim()).length} Kriteria)
                   </span>
                   <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto bg-white shadow-2xs">
                     <table className="w-full text-left border-collapse text-xs">
@@ -1293,7 +1328,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                       </thead>
                       <tbody className="divide-y divide-slate-100 font-medium">
                         {pmQcParams
-                          .filter((p) => p.name.trim())
+                          .filter((p) => p.name?.trim())
                           .map((p, idx) => (
                             <tr key={idx} className="hover:bg-purple-50/30">
                               <td className="py-2 px-3 text-center font-mono text-[10px] text-slate-400 font-bold">{idx + 1}</td>

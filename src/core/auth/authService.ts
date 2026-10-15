@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { UserProfile, ModulePermission } from '../../types';
+import { UserProfile, ModulePermission, Department } from '../../types';
 import { DEMO_USERS, INITIAL_SYSTEM_USERS } from './mockUsers';
 
 const AUTH_STORAGE_KEY = 'cosmo_ddmp_auth_user';
@@ -275,7 +275,7 @@ export const authService = {
         name: customMatch.name,
         department: customMatch.department,
         role: customMatch.role,
-        email: constructEmail(customMatch.nik),
+        email: constructEmails(customMatch.nik)[0],
         lastLogin: new Date().toISOString(),
         specificAccess: specificAcc,
       };

@@ -435,7 +435,7 @@ export const UniversalQrScannerModal: React.FC<UniversalQrScannerModalProps> = (
         const grn = (r.grnNumber || '').toLowerCase();
         const repNum = (r.reportNumber || '').toLowerCase();
         const id = (r.id || '').toLowerCase();
-        const batch = (r.batchNumber || '').toLowerCase();
+        const batch = (r.batchNumberVendor || '').toLowerCase();
         const normLot = normalizeLotNumber(r.lotInternalNumber || r.grnNumber).toLowerCase();
 
         return (

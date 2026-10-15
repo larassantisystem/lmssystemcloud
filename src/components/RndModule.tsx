@@ -49,32 +49,43 @@ export const RndModule: React.FC<RndModuleProps> = ({
   const [formulations, setFormulations] = useState<BulkFormulation[]>([]);
   const [selectedFormulation, setSelectedFormulation] = useState<BulkFormulation | null>(null);
 
-  // Data Loading directly from Cloudflare D1
+  // Header summary counts (lightweight queries, zero row payload)
+  const [counts, setCounts] = useState<{ rm: number; pm: number; pj: number; variants: number }>({
+    rm: 0,
+    pm: 0,
+    pj: 0,
+    variants: 0,
+  });
+
+  // Load lightweight summary counts on mount
   useEffect(() => {
-    // 1. Sync Materials & Packaging with Cloudflare D1
-    materialService.getMaterials().then((res) => {
-      if (res) {
-        setRawMaterials(res);
-      }
-    });
-
-    packagingService.getPackagingMaterials().then((res) => {
-      if (res) {
-        setPackagingMaterials(res);
-      }
-    });
-
-    // 2. Products & Multi-Variants (PJ0001, PJ0002) directly from Cloudflare D1
-    productService.getProducts().then((res) => {
-      setProducts(res);
-    });
-
-    // 3. Formulations directly from Cloudflare D1 / formulaService
-    formulaService.getFormulations().then((res) => {
-      setFormulations(res);
-      if (res.length > 0) setSelectedFormulation(res[0]);
-    });
+    materialService.getMaterialsCount().then((count) => setCounts((prev) => ({ ...prev, rm: count })));
+    packagingService.getPackagingMaterialsCount().then((count) => setCounts((prev) => ({ ...prev, pm: count })));
+    productService.getProductsCount().then(({ totalProducts, totalVariants }) =>
+      setCounts((prev) => ({ ...prev, pj: totalProducts, variants: totalVariants }))
+    );
   }, []);
+
+  // Lazy loading: Only fetch complete lists when Formula or BOM Calculator tab is opened
+  useEffect(() => {
+    if (activeSubTab === 'formula' || activeSubTab === 'bom-calculator') {
+      if (rawMaterials.length === 0) {
+        materialService.getMaterials().then((res) => res && setRawMaterials(res));
+      }
+      if (packagingMaterials.length === 0) {
+        packagingService.getPackagingMaterials().then((res) => res && setPackagingMaterials(res));
+      }
+      if (products.length === 0) {
+        productService.getProducts().then((res) => res && setProducts(res));
+      }
+      if (formulations.length === 0) {
+        formulaService.getFormulations().then((res) => {
+          setFormulations(res);
+          if (res.length > 0 && !selectedFormulation) setSelectedFormulation(res[0]);
+        });
+      }
+    }
+  }, [activeSubTab, rawMaterials.length, packagingMaterials.length, products.length, formulations.length, selectedFormulation]);
 
   const handleSaveRM = async (newRM: RawMaterial) => {
     const res = await materialService.saveSingleMaterial(newRM);
@@ -263,15 +274,15 @@ export const RndModule: React.FC<RndModuleProps> = ({
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <div className="px-2.5 py-1 rounded-xl bg-purple-50/80 border border-purple-100 flex items-center gap-1.5">
             <span className="text-[10px] font-bold text-slate-500 uppercase">PJ:</span>
-            <span className="text-xs font-black text-purple-700 font-mono">{products.length} ({totalVariantsCount} Var)</span>
+            <span className="text-xs font-black text-purple-700 font-mono">{counts.pj || products.length} ({counts.variants || totalVariantsCount} Var)</span>
           </div>
           <div className="px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-1.5">
             <span className="text-[10px] font-bold text-slate-500 uppercase">Bahan:</span>
-            <span className="text-xs font-black text-slate-800 font-mono">{rawMaterials.length} BB</span>
+            <span className="text-xs font-black text-slate-800 font-mono">{counts.rm || rawMaterials.length} BB</span>
           </div>
           <div className="px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 flex items-center gap-1.5">
             <span className="text-[10px] font-bold text-slate-500 uppercase">Kemas:</span>
-            <span className="text-xs font-black text-slate-800 font-mono">{packagingMaterials.length} BK</span>
+            <span className="text-xs font-black text-slate-800 font-mono">{counts.pm || packagingMaterials.length} BK</span>
           </div>
 
           {(rawMaterials.length > 0 || packagingMaterials.length > 0) && (

@@ -330,6 +330,7 @@ export const GrnFormModal: React.FC<GrnFormModalProps> = ({
         halalAttachment: halalFileName || undefined,
         receivedBy: receivedByStaff || userName,
         notes: additionalNotes.trim() || undefined,
+        grnNumber: '',
       });
 
       setShowPasswordModal(false);

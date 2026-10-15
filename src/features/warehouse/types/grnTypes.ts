@@ -7,6 +7,7 @@ export type GrnQcStatus =
   | 'PASSED'
   | 'PASSED_WITH_DEVIATION'
   | 'RELEASED'
+  | 'RELEASE_DEVIATION'
   | 'REJECTED'
   | 'REVERTED_TO_WAREHOUSE';
 
@@ -44,6 +45,7 @@ export interface GrnRecord {
   halalAttachment?: string;
   receivedBy: string;
   createdAt: string;
+  updatedAt?: string;
   notes?: string;
   qcPayload?: any;
 
