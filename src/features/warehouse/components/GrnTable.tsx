@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { GrnRecord, GrnMaterialType, GrnQcStatus } from '../types/grnTypes';
-import { warehouseService } from '../warehouseService';
+import { warehouseService, UNRELEASED_QC_STATUSES, RELEASED_QC_STATUSES } from '../warehouseService';
 import { Pagination } from '../../../core/ui-components/Pagination';
 import { QuarantineLabelModal } from './QuarantineLabelModal';
 import { GrnEditModal } from './GrnEditModal';
@@ -52,11 +52,19 @@ export const GrnTable: React.FC<GrnTableProps> = ({
 
   // Category separation: 'raw' or 'packaging'
   const [activeCategory, setActiveCategory] = useState<'raw' | 'packaging'>('raw');
+  // Release pipeline toggle tab: 'unreleased' (Belum Rilis - default) vs 'released' (Riwayat Rilis)
+  const [releaseGroupTab, setReleaseGroupTab] = useState<'unreleased' | 'released'>('unreleased');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | GrnQcStatus>('ALL');
   const isCompactMode = true;
 
-  // Pagination states (Pilihan B: 20 baris per halaman untuk efisiensi Egress)
+  // Group counts for tabs (unreleased vs released)
+  const [groupCounts, setGroupCounts] = useState<{ unreleasedCount: number; releasedCount: number }>({
+    unreleasedCount: 0,
+    releasedCount: 0,
+  });
+
+  // Pagination states (20 baris per halaman untuk efisiensi Egress)
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [serverPageData, setServerPageData] = useState<{
@@ -65,6 +73,11 @@ export const GrnTable: React.FC<GrnTableProps> = ({
     totalPages: number;
   } | null>(null);
   const [isServerLoading, setIsServerLoading] = useState(false);
+
+  // Fetch group counts for the tabs
+  useEffect(() => {
+    warehouseService.getGrnGroupCounts(activeCategory).then(setGroupCounts);
+  }, [activeCategory, records]);
 
   // Detail Modal State
   const [selectedRecord, setSelectedRecord] = useState<GrnRecord | null>(null);
@@ -85,7 +98,7 @@ export const GrnTable: React.FC<GrnTableProps> = ({
   // Selected records for batch operations
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
 
-  // Server-Side Pagination Effect
+  // Server-Side Pagination Effect with releaseGroup filter
   useEffect(() => {
     let isCancelled = false;
     setIsServerLoading(true);
@@ -97,6 +110,7 @@ export const GrnTable: React.FC<GrnTableProps> = ({
           pageSize: itemsPerPage,
           materialType: activeCategory,
           status: statusFilter,
+          releaseGroup: releaseGroupTab,
           search: searchQuery,
           forceRefresh: true,
         })
@@ -120,7 +134,7 @@ export const GrnTable: React.FC<GrnTableProps> = ({
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [currentPage, itemsPerPage, activeCategory, statusFilter, searchQuery, records]);
+  }, [currentPage, itemsPerPage, activeCategory, releaseGroupTab, statusFilter, searchQuery, records]);
 
   // Category counts
   const rawCount = useMemo(
@@ -137,15 +151,21 @@ export const GrnTable: React.FC<GrnTableProps> = ({
     return records
       .filter((rec) => {
         if (rec.materialType !== activeCategory) return false;
+
         if (statusFilter !== 'ALL') {
           if (statusFilter === 'PASSED' || statusFilter === 'RELEASED') {
-            if (rec.qcStatus !== 'PASSED' && rec.qcStatus !== 'RELEASED' && rec.qcStatus !== 'PASSED_WITH_DEVIATION') {
+            if (rec.qcStatus !== 'PASSED' && rec.qcStatus !== 'RELEASED' && rec.qcStatus !== 'PASSED_WITH_DEVIATION' && rec.qcStatus !== 'RELEASE_DEVIATION') {
               return false;
             }
           } else if (rec.qcStatus !== statusFilter) {
             return false;
           }
+        } else if (releaseGroupTab === 'unreleased') {
+          if (!UNRELEASED_QC_STATUSES.includes(rec.qcStatus)) return false;
+        } else if (releaseGroupTab === 'released') {
+          if (!RELEASED_QC_STATUSES.includes(rec.qcStatus)) return false;
         }
+
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase();
         return (
@@ -165,9 +185,9 @@ export const GrnTable: React.FC<GrnTableProps> = ({
         if (dateA !== dateB) return dateA - dateB;
         return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       });
-  }, [records, activeCategory, statusFilter, searchQuery]);
+  }, [records, activeCategory, releaseGroupTab, statusFilter, searchQuery]);
 
-  // Server-Side pagination takes precedence, reducing egress to only 25 records per request
+  // Server-Side pagination takes precedence, reducing egress to only 20 records per request
   const totalItems = serverPageData ? serverPageData.totalItems : filteredRecords.length;
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
@@ -322,7 +342,78 @@ export const GrnTable: React.FC<GrnTableProps> = ({
         {/* Info Urutan */}
         <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-xl">
           <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
-          <span>Urutan: <strong>Terlama ke Baru (Ascending)</strong></span>
+          <span>Urutan: <strong>Terbaru (Descending)</strong></span>
+        </div>
+      </div>
+
+      {/* Release Pipeline Toggle Bar: Belum Rilis (Default) vs Riwayat Rilis */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200 shadow-2xs">
+        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setReleaseGroupTab('unreleased');
+              setStatusFilter('ALL');
+              setCurrentPage(1);
+            }}
+            className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+              releaseGroupTab === 'unreleased'
+                ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>⏳ Belum Rilis (Aktif)</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                releaseGroupTab === 'unreleased'
+                  ? 'bg-slate-950 text-amber-300'
+                  : 'bg-slate-200 text-slate-700'
+              }`}
+            >
+              {groupCounts.unreleasedCount} Lot
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setReleaseGroupTab('released');
+              setStatusFilter('ALL');
+              setCurrentPage(1);
+            }}
+            className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer ${
+              releaseGroupTab === 'released'
+                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>✅ Riwayat Rilis & Arsip</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                releaseGroupTab === 'released'
+                  ? 'bg-emerald-800 text-white'
+                  : 'bg-slate-200 text-slate-700'
+              }`}
+            >
+              {groupCounts.releasedCount} Lot
+            </span>
+          </button>
+        </div>
+
+        <div className="hidden lg:flex items-center gap-2 text-[11px] text-slate-500 font-medium pr-2">
+          {releaseGroupTab === 'unreleased' ? (
+            <span className="flex items-center gap-1.5 text-amber-800 bg-amber-50/80 px-2.5 py-1 rounded-lg border border-amber-200/80">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+              Menampilkan lot dalam proses (Karantina, Sedang Uji, Review QM, Dikembalikan)
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50/80 px-2.5 py-1 rounded-lg border border-emerald-200/80">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              Menampilkan arsip riwayat lot yang sudah selesai diproses QC & dirilis
+            </span>
+          )}
         </div>
       </div>
 
@@ -347,7 +438,7 @@ export const GrnTable: React.FC<GrnTableProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* QC Status Filter */}
+          {/* QC Status Filter tailored to current releaseGroupTab */}
           <select
             value={statusFilter}
             onChange={(e) => {
@@ -356,13 +447,21 @@ export const GrnTable: React.FC<GrnTableProps> = ({
             }}
             className="text-xs border border-slate-200 rounded-xl px-3 py-2 bg-white text-slate-700 font-semibold focus:outline-none focus:ring-2 focus:ring-slate-300 shadow-2xs cursor-pointer"
           >
-            <option value="ALL">Semua Status QC</option>
-            <option value="QUARANTINE">Karantina CPKB</option>
-            <option value="QUALITY_CONTROL_PROCESS">Sedang Uji (QC Analisa)</option>
-            <option value="AWAITING_QM_AUTHORIZATION">Menunggu Otorisasi QM</option>
-            <option value="PASSED">Rilis (Lolos QC)</option>
-            <option value="REJECTED">Ditolak (Rejected)</option>
-            <option value="REVERTED_TO_WAREHOUSE">Dikembalikan QC</option>
+            {releaseGroupTab === 'unreleased' ? (
+              <>
+                <option value="ALL">Semua Status Belum Rilis</option>
+                <option value="QUARANTINE">Karantina CPKB</option>
+                <option value="QUALITY_CONTROL_PROCESS">Sedang Uji (QC Analisa)</option>
+                <option value="AWAITING_QM_AUTHORIZATION">Menunggu Otorisasi QM</option>
+                <option value="REVERTED_TO_WAREHOUSE">Dikembalikan QC</option>
+              </>
+            ) : (
+              <>
+                <option value="ALL">Semua Riwayat Rilis</option>
+                <option value="PASSED">Rilis (Lolos QC)</option>
+                <option value="REJECTED">Ditolak (Rejected)</option>
+              </>
+            )}
           </select>
         </div>
       </div>

@@ -52,6 +52,7 @@ export const WarehouseModule: React.FC<WarehouseModuleProps> = ({
   // GRN records - instant cache initializers (0ms paint)
   const [grnRecords, setGrnRecords] = useState<GrnRecord[]>(() => warehouseService.getLocalRecords());
   const [isLoadingGrn, setIsLoadingGrn] = useState<boolean>(() => warehouseService.getLocalRecords().length === 0);
+  const [serverStats, setServerStats] = useState<GrnStats | null>(null);
 
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -65,46 +66,56 @@ export const WarehouseModule: React.FC<WarehouseModuleProps> = ({
   }, [activeSubTab]);
 
   const loadData = async () => {
-    // 1. Prioritize GRN records so table appears instantly and updates smoothly
-    warehouseService.getGrnRecords()
+    // 1. Fetch exact aggregate stats in 1 lightweight query (< 10 rows read)
+    warehouseService.getGrnStatsServer()
+      .then((st) => {
+        if (st) setServerStats(st);
+      })
+      .catch((err) => console.warn('[WarehouseModule] getGrnStatsServer fallback:', err));
+
+    // 2. Prioritize unreleased GRN records so table appears instantly and rows read are minimal
+    warehouseService.getGrnRecords(true, 'unreleased')
       .then((grns) => {
         if (grns && grns.length > 0) {
           setGrnRecords(grns);
         }
       })
       .catch((err) => {
-        console.warn('[WarehouseModule] Supabase GRN fetch fallback:', err);
+        console.warn('[WarehouseModule] GRN fetch fallback:', err);
       })
       .finally(() => {
         setIsLoadingGrn(false);
       });
 
-    // 2. Refresh Master Materials in the background for new modal entries without blocking the table
-    Promise.all([
-      materialService.getMaterials(),
-      packagingService.getPackagingMaterials(),
-    ])
-      .then(([rms, pms]) => {
-        if (rms && rms.length > 0) setRawMaterials(rms);
-        if (pms && pms.length > 0) setPackagingMaterials(pms);
-      })
-      .catch((err) => {
-        console.warn('[WarehouseModule] Master materials fetch notice:', err);
-      })
-      .finally(() => {
-        setIsLoadingMaster(false);
-      });
+    // 3. Refresh Master Materials in the background if empty for modal entries without blocking the table
+    if (rawMaterials.length === 0 || packagingMaterials.length === 0) {
+      Promise.all([
+        materialService.getMaterials(),
+        packagingService.getPackagingMaterials(),
+      ])
+        .then(([rms, pms]) => {
+          if (rms && rms.length > 0) setRawMaterials(rms);
+          if (pms && pms.length > 0) setPackagingMaterials(pms);
+        })
+        .catch((err) => {
+          console.warn('[WarehouseModule] Master materials fetch notice:', err);
+        })
+        .finally(() => {
+          setIsLoadingMaster(false);
+        });
+    }
   };
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const stats: GrnStats = warehouseService.calculateStats(grnRecords);
+  const stats: GrnStats = serverStats || warehouseService.calculateStats(grnRecords);
 
   const handleSaveGrn = async (recordData: Omit<GrnRecord, 'id' | 'createdAt'> & { grnNumber?: string }) => {
     const saved = await warehouseService.saveGrnRecord(recordData);
     setGrnRecords((prev) => [saved, ...prev]);
+    warehouseService.getGrnStatsServer().then((st) => st && setServerStats(st)).catch(() => {});
     // Synchronize stock lots
     await stockService.getStockLots();
     // Buka dialog cetak label karantina otomatis

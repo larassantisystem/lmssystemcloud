@@ -69,23 +69,11 @@ export const qualityService = {
   getReports: async (): Promise<QcInspectionReport[]> => {
     let storedReports: QcInspectionReport[] = [...memoryReports];
 
-    // Fast resolution: Use local master data first (0ms) to avoid downloading thousands of rows on every queue load
-    let packagingMaterials = packagingService.getLocalPackagingMaterials();
-    let rawMaterials = materialService.getLocalMaterials();
-
-    // Only fetch remote master data if local cache is completely empty
-    const masterPromises: Promise<any>[] = [];
-    if (packagingMaterials.length === 0) {
-      masterPromises.push(packagingService.getPackagingMaterials().then((res) => { packagingMaterials = res; }));
-    }
-    if (rawMaterials.length === 0) {
-      masterPromises.push(materialService.getMaterials().then((res) => { rawMaterials = res; }));
-    }
-
-    // Fetch GRN records (with fast timeout/fallback)
-    const [grnRecords] = await Promise.all([
+    // Always fetch fresh master data from services to ensure Bagian B QC parameters are fully synchronized from Master Data
+    let [packagingMaterials, rawMaterials, grnRecords] = await Promise.all([
+      packagingService.getPackagingMaterials(true),
+      materialService.getMaterials(true),
       warehouseService.getGrnRecords(),
-      ...masterPromises,
     ]);
     let isModified = false;
 
@@ -108,21 +96,34 @@ export const qualityService = {
       const stableId = grn.id ? (grn.id.startsWith('qc-rep-') ? grn.id : `qc-rep-${grn.id}`) : `qc-rep-${grn.grnNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
       const existingReport = storedReports.find((r) => r.id === stableId || r.grnId === grn.id || r.grnNumber === grn.grnNumber);
 
-      // Resolve dynamic QC parameters registered in Master Data (Bagian B)
+      // Resolve dynamic QC parameters strictly from Master Data (Bagian B)
       let resolvedParams: Array<{ name: string; spec: string }> = [];
-      if (grn.materialType === 'packaging') {
-        const matchedPM = packagingMaterials.find(
-          (pm) => pm.code === grn.materialCode || pm.name.toLowerCase() === grn.materialName.toLowerCase()
-        );
+      const isPackagingType = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((grn.materialType || '').trim().toLowerCase()) ||
+        (grn.materialType || '').toLowerCase().includes('kemas') ||
+        (grn.materialType || '').toLowerCase().includes('pack');
+
+      const cleanCode = (grn.materialCode || '').trim().toLowerCase();
+      const cleanName = (grn.materialName || '').trim().toLowerCase();
+
+      if (isPackagingType) {
+        const matchedPM = packagingMaterials.find((pm) => {
+          const pmCode = (pm.code || '').trim().toLowerCase();
+          const pmName = (pm.name || '').trim().toLowerCase();
+          return (cleanCode && pmCode === cleanCode) ||
+                 (cleanName && (pmName === cleanName || pmName.includes(cleanName) || cleanName.includes(pmName)));
+        });
         if (matchedPM?.qcParameters && matchedPM.qcParameters.length > 0) {
           resolvedParams = matchedPM.qcParameters
             .filter((p) => p.name && p.name.trim())
             .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
         }
       } else {
-        const matchedRM = rawMaterials.find(
-          (rm) => rm.code === grn.materialCode || rm.name.toLowerCase() === grn.materialName.toLowerCase()
-        );
+        const matchedRM = rawMaterials.find((rm) => {
+          const rmCode = (rm.code || '').trim().toLowerCase();
+          const rmName = (rm.name || '').trim().toLowerCase();
+          return (cleanCode && rmCode === cleanCode) ||
+                 (cleanName && (rmName === cleanName || rmName.includes(cleanName) || cleanName.includes(rmName)));
+        });
         if (matchedRM?.qcParameters && matchedRM.qcParameters.length > 0) {
           resolvedParams = matchedRM.qcParameters
             .filter((p) => p.name && p.name.trim())
@@ -130,7 +131,7 @@ export const qualityService = {
         }
       }
 
-      // Exact criteria from Master Bagian B (zero hardcoded defaults)
+      // Exact criteria strictly from Master Bagian B (zero hardcoded defaults)
       const effectiveParamTemplates = resolvedParams;
       if (effectiveParamTemplates.length > 0) {
         grn.qcParametersCount = effectiveParamTemplates.length;

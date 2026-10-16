@@ -59,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_grn_material_type ON warehouse_grn(material_type)
 CREATE INDEX IF NOT EXISTS idx_grn_qc_status ON warehouse_grn(qc_status);
 CREATE INDEX IF NOT EXISTS idx_grn_internal_lot ON warehouse_grn(internal_lot_number);
 CREATE INDEX IF NOT EXISTS idx_grn_created_at ON warehouse_grn(created_at);
+CREATE INDEX IF NOT EXISTS idx_grn_status_type_created ON warehouse_grn(qc_status, material_type, created_at DESC);
 
 -- 2. TABEL LAPORAN PENGAWASAN MUTU (QC INSPECTION REPORTS)
 CREATE TABLE IF NOT EXISTS qc_inspection_reports (

@@ -80,6 +80,7 @@ export interface GrnPaginatedQuery {
   pageSize?: number;
   materialType?: GrnMaterialType | 'all';
   status?: string;
+  releaseGroup?: 'unreleased' | 'released' | 'all';
   search?: string;
   forceRefresh?: boolean;
 }

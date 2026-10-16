@@ -1,6 +1,6 @@
 {
-  "summary": "Rencana komprehensif implementasi server-side pagination dan query projection pada seluruh master data (Bahan Baku, Bahan Kemas, dan Produk) untuk mereduksi rows read dari ribuan baris menjadi pecahan minimal sesuai kebutuhan layar.",
-  "updatedAt": "2026-10-15T08:07:43.033830319Z",
+  "summary": "Implementation plan to fix missing parameters for packaging materials like K1280 during QC inspection by querying packaging materials by specific codes/names rather than truncating with limit(300).",
+  "updatedAt": "2026-10-16T01:16:25.755287228Z",
   "requestFeedback": true,
   "userFacing": true
 }

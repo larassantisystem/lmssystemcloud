@@ -214,12 +214,12 @@ export const packagingService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // Optimized single fetch (limit 300) without multi-thousand unbounded while loop
+        // Optimized single fetch (limit 2000) without multi-thousand unbounded while loop
         const { data, error } = await supabase
           .from('packaging_materials')
           .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
           .order('code', { ascending: true })
-          .limit(300);
+          .limit(2000);
 
         if (!error && data && data.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
@@ -263,6 +263,7 @@ export const packagingService = {
   },
 
   saveSinglePackagingMaterial: async (item: PackagingMaterial): Promise<{ success: boolean; error?: string; updatedId?: string }> => {
+    packagingService.invalidateCache();
     // Ensure ID is a valid UUID for PostgreSQL
     const validId = ensureUUID(item.id);
     const normalizedItem: PackagingMaterial = { ...item, id: validId };
@@ -375,6 +376,7 @@ export const packagingService = {
   },
 
   savePackagingMaterials: async (materials: PackagingMaterial[]): Promise<void> => {
+    packagingService.invalidateCache();
     if (!materials || materials.length === 0) return;
     const normalizedList = materials.map((p) => ({ ...p, id: ensureUUID(p.id) }));
 
