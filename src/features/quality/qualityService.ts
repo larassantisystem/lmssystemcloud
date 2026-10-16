@@ -48,6 +48,17 @@ export const qualityService = {
    * Read cached QC inspection reports synchronously for instant (0ms) render
    */
   getLocalReports: (): QcInspectionReport[] => {
+    if (memoryReports.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = localStorage.getItem(QC_REPORTS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            memoryReports = parsed;
+          }
+        }
+      } catch {}
+    }
     return memoryReports;
   },
 
@@ -513,6 +524,11 @@ export const qualityService = {
     });
 
     memoryReports = storedReports;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem(QC_REPORTS_STORAGE_KEY, JSON.stringify(storedReports));
+      } catch {}
+    }
     return storedReports;
   },
 

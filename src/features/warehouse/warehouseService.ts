@@ -501,7 +501,17 @@ export const warehouseService = {
    * Helper to retrieve localStorage records safely
    */
   getLocalRecords: (): GrnRecord[] => {
-    // Explicitly do not read from local storage anymore as per mandate. Always return empty array.
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const raw = localStorage.getItem('lsm_warehouse_grn_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      } catch {}
+    }
     return [];
   },
 
