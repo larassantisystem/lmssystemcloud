@@ -9,130 +9,10 @@ import { authService } from '../../core/auth/authService';
 
 const WAREHOUSE_GRN_STORAGE_KEY = 'lsm_warehouse_grn_v1';
 
-const defaultGrnRecords: GrnRecord[] = [
-  {
-    id: 'grn-rel-001',
-    grnNumber: 'GRN-2026-0901',
-    materialType: 'raw',
-    materialId: 'mat-raw-01',
-    materialCode: 'B0001',
-    materialName: 'Paracetamol Powder (USP)',
-    manufacturer: 'PT Indo Farma Chemical',
-    distributor: 'PT Kimia Sejahtera',
-    poNumber: 'PO-2026-0881',
-    deliveryNoteNumber: 'SJ-88901',
-    batchNumber: 'SUP-PCT-991',
-    internalLotNumber: 'LBB2609001',
-    receivedDate: '2026-09-01',
-    expiryDate: '2029-09-01',
-    retestDate: '2028-09-01',
-    quantityReceived: 1000,
-    currentQuantity: 1000,
-    unit: 'kg',
-    containerCount: 40,
-    containerType: 'Drum',
-    storageLocation: 'Gudang Bahan Baku (Rak Rilis A-01)',
-    storageConditions: 'Suhu Ruang (15 - 25°C)',
-    qcStatus: 'PASSED',
-    qcParametersCount: 8,
-    sealCondition: 'intact',
-    packagingCondition: 'clean',
-    receivedBy: 'Staf Gudang (Budi)',
-    createdAt: '2026-09-01T08:00:00Z',
-    notes: 'Lolos uji QC Quality Manager.'
-  },
-  {
-    id: 'grn-rel-002',
-    grnNumber: 'GRN-2026-0902',
-    materialType: 'packaging',
-    materialId: 'mat-pkg-01',
-    materialCode: 'K0001',
-    materialName: 'Botol Sirup Amber 60ml + Tutup',
-    manufacturer: 'PT Glass Medika Nusantara',
-    distributor: 'PT Kemasan Utama',
-    poNumber: 'PO-2026-0882',
-    deliveryNoteNumber: 'SJ-99201',
-    batchNumber: 'SUP-BOT-441',
-    internalLotNumber: 'LBK2609001',
-    receivedDate: '2026-09-02',
-    expiryDate: '2031-09-02',
-    quantityReceived: 5000,
-    currentQuantity: 5000,
-    unit: 'pcs',
-    containerCount: 50,
-    containerType: 'Karton Box',
-    storageLocation: 'Gudang Bahan Kemas (Rak Rilis K-01)',
-    storageConditions: 'Kering, Terlindung dari Cahaya',
-    qcStatus: 'PASSED',
-    qcParametersCount: 5,
-    sealCondition: 'intact',
-    packagingCondition: 'clean',
-    receivedBy: 'Staf Gudang (Andi)',
-    createdAt: '2026-09-02T09:00:00Z',
-    notes: 'Lolos inspeksi fisik kemasan.'
-  },
-  {
-    id: 'grn-q-003',
-    grnNumber: 'GRN-2026-0903',
-    materialType: 'raw',
-    materialId: 'mat-raw-02',
-    materialCode: 'B0002',
-    materialName: 'Lactose Monohydrate (Ph. Eur.)',
-    manufacturer: 'DMV International',
-    distributor: 'PT Pharma Excipient',
-    poNumber: 'PO-2026-0883',
-    deliveryNoteNumber: 'SJ-77301',
-    batchNumber: 'SUP-LAC-123',
-    receivedDate: '2026-09-03',
-    expiryDate: '2028-09-03',
-    quantityReceived: 500,
-    currentQuantity: 500,
-    unit: 'kg',
-    containerCount: 20,
-    containerType: 'Bag',
-    storageLocation: 'Gudang Karantina (Rak Q-02)',
-    storageConditions: 'Suhu Ruang',
-    qcStatus: 'QUARANTINE',
-    qcParametersCount: 6,
-    sealCondition: 'intact',
-    packagingCondition: 'clean',
-    receivedBy: 'Staf Gudang (Budi)',
-    createdAt: '2026-09-03T10:00:00Z',
-    notes: 'Menunggu sampling QC.'
-  },
-  {
-    id: 'grn-t-004',
-    grnNumber: 'GRN-2026-0904',
-    materialType: 'raw',
-    materialId: 'mat-raw-03',
-    materialCode: 'B0003',
-    materialName: 'Avicel PH 102 (Microcrystalline Cellulose)',
-    manufacturer: 'FMC Biopolymer',
-    distributor: 'PT Solusi Bahan',
-    poNumber: 'PO-2026-0884',
-    deliveryNoteNumber: 'SJ-66401',
-    batchNumber: 'SUP-AVI-456',
-    receivedDate: '2026-09-04',
-    expiryDate: '2028-09-04',
-    quantityReceived: 300,
-    currentQuantity: 300,
-    unit: 'kg',
-    containerCount: 15,
-    containerType: 'Fiber Drum',
-    storageLocation: 'Laboratorium QC (Ruang Uji 1)',
-    storageConditions: 'Suhu Ruang',
-    qcStatus: 'QUALITY_CONTROL_PROCESS',
-    qcParametersCount: 7,
-    sealCondition: 'intact',
-    packagingCondition: 'clean',
-    receivedBy: 'Staf Gudang (Andi)',
-    createdAt: '2026-09-04T11:00:00Z',
-    notes: 'Sedang dalam pengujian laboratorium.'
-  }
-];
+const defaultGrnRecords: GrnRecord[] = [];
 
 // In-memory runtime cache untuk efisiensi EGRESS (BUKAN local storage)
-let inMemoryGrnRecords: GrnRecord[] = [...defaultGrnRecords];
+let inMemoryGrnRecords: GrnRecord[] = [];
 let lastGrnFetchTime = 0;
 const GRN_CACHE_TTL_MS = 45 * 1000; // 45 detik cache di RAM
 
@@ -475,21 +355,6 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
   };
 }
 
-export const UNRELEASED_QC_STATUSES: GrnQcStatus[] = [
-  'QUARANTINE',
-  'QUALITY_CONTROL_PROCESS',
-  'AWAITING_QM_AUTHORIZATION',
-  'REVERTED_TO_WAREHOUSE',
-];
-
-export const RELEASED_QC_STATUSES: GrnQcStatus[] = [
-  'PASSED',
-  'RELEASED',
-  'PASSED_WITH_DEVIATION',
-  'RELEASE_DEVIATION',
-  'REJECTED',
-];
-
 export const warehouseService = {
   /**
    * Audit Supabase connection and table status
@@ -644,36 +509,23 @@ export const warehouseService = {
     lastGrnFetchTime = 0;
   },
 
-  getGrnRecords: async (
-    forceRefresh = false,
-    releaseFilter: 'unreleased' | 'released' | 'all' = 'unreleased'
-  ): Promise<GrnRecord[]> => {
+  getGrnRecords: async (forceRefresh = false): Promise<GrnRecord[]> => {
     const isCacheValid = !forceRefresh && inMemoryGrnRecords.length > 0 && (Date.now() - lastGrnFetchTime < GRN_CACHE_TTL_MS);
     if (isCacheValid) {
-      if (releaseFilter === 'unreleased') {
-        return inMemoryGrnRecords.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus));
-      } else if (releaseFilter === 'released') {
-        return inMemoryGrnRecords.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus));
-      }
       return inMemoryGrnRecords;
     }
 
     // Prioritize Cloudflare D1
     if (supabaseClient.isCloudflareConfigured) {
       try {
-        let whereClause = `WHERE grn_number != 'SYSTEM-STOCK-LEDGER'`;
-        if (releaseFilter === 'unreleased') {
-          whereClause += ` AND qc_status IN ('QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION', 'REVERTED_TO_WAREHOUSE')`;
-        } else if (releaseFilter === 'released') {
-          whereClause += ` AND qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION', 'REJECTED')`;
-        }
-
-        const sql = `SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ${whereClause} ORDER BY created_at DESC LIMIT 100`;
-
+        // Fetch from D1 API
         const response = await fetch('/api/d1/query', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sql, params: [] }),
+          body: JSON.stringify({ 
+          sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
+          params: [] 
+        })
         });
         const data = await response.json();
         if (data.results) {
@@ -683,6 +535,7 @@ export const warehouseService = {
              materialType: d.material_type,
              materialCode: d.material_code,
              materialName: d.material_name,
+             // ... map other fields
           })).map(mapDbRowToGrnRecord);
           inMemoryGrnRecords = mapped;
           lastGrnFetchTime = Date.now();
@@ -693,108 +546,50 @@ export const warehouseService = {
       }
     }
 
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let { data, error }: { data: any; error: any } = await withTimeout(
+          supabase
+            .from('warehouse_grn')
+            .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')
+            .order('created_at', { ascending: false })
+            .limit(2000),
+          15000
+        );
+
+        if (error && (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('schema cache'))) {
+          const fallbackRes = await supabase
+            .from('warehouse_grn')
+            .select('id, grn_number, material_type, material_code, material_name, internal_lot_number, received_date, quantity_received, unit, qc_status, notes, created_at')
+            .order('created_at', { ascending: false })
+            .limit(2000);
+          data = fallbackRes.data;
+          error = fallbackRes.error;
+        }
+
+        if (!error && data && data.length > 0) {
+          const mapped: GrnRecord[] = data
+            .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
+            .map(mapDbRowToGrnRecord);
+
+          inMemoryGrnRecords = mapped;
+          lastGrnFetchTime = Date.now();
+          return mapped;
+        } else if (error) {
+          console.warn('[warehouseService] Supabase GRN query warning:', error.message);
+        }
+      } catch (err) {
+        console.warn('[warehouseService] Supabase GRN fetch error:', err);
+      }
+    }
+
     return inMemoryGrnRecords;
   },
 
   /**
-   * Mengambil ringkasan statistik global GRN secara agregasi langsung di D1 (< 10 baris terbaca)
-   */
-  getGrnStatsServer: async (): Promise<GrnStats> => {
-    if (supabaseClient.isCloudflareConfigured) {
-      try {
-        const response = await fetch('/api/d1/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sql: `SELECT qc_status, material_type, count(*) as count FROM warehouse_grn WHERE grn_number != 'SYSTEM-STOCK-LEDGER' GROUP BY qc_status, material_type;`,
-            params: [],
-          }),
-        });
-        const data = await response.json();
-        if (data.results && Array.isArray(data.results)) {
-          let totalIncoming = 0;
-          let inQuarantine = 0;
-          let underTesting = 0;
-          let awaitingAuth = 0;
-          let passedQC = 0;
-          let rejectedQC = 0;
-          let rawMaterialsCount = 0;
-          let packagingCount = 0;
-
-          for (const row of data.results) {
-            const count = Number(row.count) || 0;
-            totalIncoming += count;
-            const status = String(row.qc_status || '').toUpperCase();
-            const matType = String(row.material_type || '').toLowerCase();
-
-            if (matType === 'raw') rawMaterialsCount += count;
-            else if (matType === 'packaging') packagingCount += count;
-
-            if (status === 'QUARANTINE') inQuarantine += count;
-            else if (status === 'QUALITY_CONTROL_PROCESS') underTesting += count;
-            else if (status === 'AWAITING_QM_AUTHORIZATION') awaitingAuth += count;
-            else if (status === 'PASSED' || status === 'RELEASED' || status === 'PASSED_WITH_DEVIATION' || status === 'RELEASE_DEVIATION') passedQC += count;
-            else if (status === 'REJECTED') rejectedQC += count;
-          }
-
-          return {
-            totalIncoming,
-            inQuarantine,
-            underTesting,
-            awaitingAuth,
-            passedQC,
-            rejectedQC,
-            rawMaterialsCount,
-            packagingCount,
-          };
-        }
-      } catch (err) {
-        console.warn('[warehouseService] getGrnStatsServer error:', err);
-      }
-    }
-    return warehouseService.calculateStats(inMemoryGrnRecords);
-  },
-
-  getGrnGroupCounts: async (materialType?: 'raw' | 'packaging' | 'all'): Promise<{ unreleasedCount: number; releasedCount: number }> => {
-    if (supabaseClient.isCloudflareConfigured) {
-      try {
-        let sql = `
-          SELECT 
-            SUM(CASE WHEN qc_status IN ('QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION', 'REVERTED_TO_WAREHOUSE') THEN 1 ELSE 0 END) as unreleased_count,
-            SUM(CASE WHEN qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION', 'REJECTED') THEN 1 ELSE 0 END) as released_count
-          FROM warehouse_grn
-          WHERE grn_number != 'SYSTEM-STOCK-LEDGER'
-        `;
-        const params: any[] = [];
-        if (materialType && materialType !== 'all') {
-          sql += ` AND material_type = ?`;
-          params.push(materialType);
-        }
-        const response = await fetch('/api/d1/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sql, params }),
-        });
-        const data = await response.json();
-        if (data.results && data.results[0]) {
-          return {
-            unreleasedCount: Number(data.results[0].unreleased_count) || 0,
-            releasedCount: Number(data.results[0].released_count) || 0,
-          };
-        }
-      } catch (err) {
-        console.warn('[warehouseService] getGrnGroupCounts error:', err);
-      }
-    }
-    const unreleasedCount = inMemoryGrnRecords.filter((r) => (!materialType || materialType === 'all' || r.materialType === materialType) && UNRELEASED_QC_STATUSES.includes(r.qcStatus)).length;
-    const releasedCount = inMemoryGrnRecords.filter((r) => (!materialType || materialType === 'all' || r.materialType === materialType) && RELEASED_QC_STATUSES.includes(r.qcStatus)).length;
-    return { unreleasedCount, releasedCount };
-  },
-
-  /**
    * Server-Side Pagination untuk tabel Penerimaan Barang (GRN).
-   * Menarik hanya sejumlah halaman (misal 20-25 baris) dari database (.range(from, to))
-   * dengan filter default 'unreleased' untuk meminimalkan rows read secara drastis.
+   * Menarik hanya sejumlah halaman (misal 25 baris) dari Supabase (.range(from, to))
+   * dan menghitung total baris akurat menggunakan { count: 'exact' } untuk efisiensi maksimal Egress.
    */
   getGrnRecordsPaginated: async (params: GrnPaginatedQuery = {}): Promise<GrnPaginatedResponse> => {
     const {
@@ -802,12 +597,11 @@ export const warehouseService = {
       pageSize = 25,
       materialType = 'all',
       status = 'ALL',
-      releaseGroup = 'unreleased',
       search = '',
       forceRefresh = false,
     } = params;
 
-    const cacheKey = `${page}_${pageSize}_${materialType}_${releaseGroup}_${status}_${search.trim().toLowerCase()}`;
+    const cacheKey = `${page}_${pageSize}_${materialType}_${status}_${search.trim().toLowerCase()}`;
     const cached = paginatedGrnCache.get(cacheKey);
     if (!forceRefresh && cached && (Date.now() - cached.timestamp < PAGINATED_CACHE_TTL_MS)) {
       return cached.data;
@@ -828,7 +622,7 @@ export const warehouseService = {
 
         if (status && status !== 'ALL') {
           if (status === 'PASSED' || status === 'RELEASED') {
-            query = query.in('qc_status', ['PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION']);
+            query = query.in('qc_status', ['PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION']);
           } else if (status === 'REVERTED_TO_WAREHOUSE') {
             query = query.or('qc_status.eq.REVERTED_TO_WAREHOUSE,notes.ilike.%REVERTED_TO_WAREHOUSE%');
           } else if (status === 'QUARANTINE') {
@@ -836,10 +630,6 @@ export const warehouseService = {
           } else {
             query = query.eq('qc_status', status);
           }
-        } else if (releaseGroup === 'unreleased') {
-          query = query.in('qc_status', UNRELEASED_QC_STATUSES);
-        } else if (releaseGroup === 'released') {
-          query = query.in('qc_status', RELEASED_QC_STATUSES);
         }
 
         if (search && search.trim()) {
@@ -889,16 +679,11 @@ export const warehouseService = {
     }
     if (status && status !== 'ALL') {
       if (status === 'PASSED' || status === 'RELEASED') {
-        list = list.filter((r) => r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION' || r.qcStatus === 'RELEASE_DEVIATION');
+        list = list.filter((r) => r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION');
       } else {
         list = list.filter((r) => r.qcStatus === status);
       }
-    } else if (releaseGroup === 'unreleased') {
-      list = list.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus));
-    } else if (releaseGroup === 'released') {
-      list = list.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus));
     }
-
     if (search && search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter((r) =>
