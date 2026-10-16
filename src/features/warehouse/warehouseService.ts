@@ -11,6 +11,10 @@ const WAREHOUSE_GRN_STORAGE_KEY = 'lsm_warehouse_grn_v1';
 
 const defaultGrnRecords: GrnRecord[] = [];
 
+export const UNRELEASED_QC_STATUSES = ['QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION', 'REVERTED_TO_WAREHOUSE'];
+export const RELEASED_QC_STATUSES = ['PASSED', 'PASSED_WITH_DEVIATION', 'RELEASED', 'RELEASE_DEVIATION'];
+export const REJECTED_QC_STATUSES = ['REJECTED'];
+
 // In-memory runtime cache untuk efisiensi EGRESS (BUKAN local storage)
 let inMemoryGrnRecords: GrnRecord[] = [];
 let lastGrnFetchTime = 0;
@@ -519,81 +523,109 @@ export const warehouseService = {
     lastGrnFetchTime = 0;
   },
 
-  getGrnRecords: async (forceRefresh = false): Promise<GrnRecord[]> => {
+  getGrnRecords: async (forceRefresh = false, releaseGroup: 'unreleased' | 'released' | 'all' = 'all'): Promise<GrnRecord[]> => {
     const isCacheValid = !forceRefresh && inMemoryGrnRecords.length > 0 && (Date.now() - lastGrnFetchTime < GRN_CACHE_TTL_MS);
-    if (isCacheValid) {
-      return inMemoryGrnRecords;
-    }
-
-    // Prioritize Cloudflare D1
-    if (supabaseClient.isCloudflareConfigured) {
-      try {
-        // Fetch from D1 API
-        const response = await fetch('/api/d1/query', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-          sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
-          params: [] 
-        })
-        });
-        const data = await response.json();
-        if (data.results) {
-          const mapped = data.results.map((d: any) => ({
-             ...d,
-             grnNumber: d.grn_number,
-             materialType: d.material_type,
-             materialCode: d.material_code,
-             materialName: d.material_name,
-             // ... map other fields
-          })).map(mapDbRowToGrnRecord);
-          inMemoryGrnRecords = mapped;
-          lastGrnFetchTime = Date.now();
-          return mapped;
+    if (!isCacheValid) {
+      // Prioritize Cloudflare D1
+      if (supabaseClient.isCloudflareConfigured) {
+        try {
+          // Fetch from D1 API
+          const response = await fetch('/api/d1/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
+              params: [] 
+            })
+          });
+          const data = await response.json();
+          if (data.results) {
+            const mapped = data.results.map((d: any) => ({
+               ...d,
+               grnNumber: d.grn_number,
+               materialType: d.material_type,
+               materialCode: d.material_code,
+               materialName: d.material_name,
+               // ... map other fields
+            })).map(mapDbRowToGrnRecord);
+            inMemoryGrnRecords = mapped;
+            lastGrnFetchTime = Date.now();
+          }
+        } catch (err) {
+          console.warn('[warehouseService] D1 fetch failed:', err);
         }
-      } catch (err) {
-        console.warn('[warehouseService] D1 fetch failed:', err);
+      }
+
+      if (isSupabaseConfigured && supabase) {
+        try {
+          let { data, error }: { data: any; error: any } = await withTimeout(
+            supabase
+              .from('warehouse_grn')
+              .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')
+              .order('created_at', { ascending: false })
+              .limit(2000),
+            15000
+          );
+
+          if (error && (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('schema cache'))) {
+            const fallbackRes = await supabase
+              .from('warehouse_grn')
+              .select('id, grn_number, material_type, material_code, material_name, internal_lot_number, received_date, quantity_received, unit, qc_status, notes, created_at')
+              .order('created_at', { ascending: false })
+              .limit(2000);
+            data = fallbackRes.data;
+            error = fallbackRes.error;
+          }
+
+          if (!error && data && data.length > 0) {
+            const mapped: GrnRecord[] = data
+              .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
+              .map(mapDbRowToGrnRecord);
+
+            inMemoryGrnRecords = mapped;
+            lastGrnFetchTime = Date.now();
+          } else if (error) {
+            console.warn('[warehouseService] Supabase GRN query warning:', error.message);
+          }
+        } catch (err) {
+          console.warn('[warehouseService] Supabase GRN fetch error:', err);
+        }
+      }
+
+      if (inMemoryGrnRecords.length === 0) {
+        inMemoryGrnRecords = warehouseService.getLocalRecords();
       }
     }
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        let { data, error }: { data: any; error: any } = await withTimeout(
-          supabase
-            .from('warehouse_grn')
-            .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')
-            .order('created_at', { ascending: false })
-            .limit(2000),
-          15000
-        );
-
-        if (error && (error.code === 'PGRST204' || error.message?.includes('column') || error.message?.includes('schema cache'))) {
-          const fallbackRes = await supabase
-            .from('warehouse_grn')
-            .select('id, grn_number, material_type, material_code, material_name, internal_lot_number, received_date, quantity_received, unit, qc_status, notes, created_at')
-            .order('created_at', { ascending: false })
-            .limit(2000);
-          data = fallbackRes.data;
-          error = fallbackRes.error;
-        }
-
-        if (!error && data && data.length > 0) {
-          const mapped: GrnRecord[] = data
-            .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
-            .map(mapDbRowToGrnRecord);
-
-          inMemoryGrnRecords = mapped;
-          lastGrnFetchTime = Date.now();
-          return mapped;
-        } else if (error) {
-          console.warn('[warehouseService] Supabase GRN query warning:', error.message);
-        }
-      } catch (err) {
-        console.warn('[warehouseService] Supabase GRN fetch error:', err);
-      }
+    if (releaseGroup === 'unreleased') {
+      return inMemoryGrnRecords.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus));
     }
-
+    if (releaseGroup === 'released') {
+      return inMemoryGrnRecords.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus));
+    }
     return inMemoryGrnRecords;
+  },
+
+  getGrnStatsServer: async (): Promise<GrnStats | null> => {
+    try {
+      const allRecords = await warehouseService.getGrnRecords(false, 'all');
+      return warehouseService.calculateStats(allRecords);
+    } catch (err) {
+      console.warn('[warehouseService] getGrnStatsServer error:', err);
+      return null;
+    }
+  },
+
+  getGrnGroupCounts: async (materialType?: 'raw' | 'packaging'): Promise<{ unreleasedCount: number; releasedCount: number }> => {
+    try {
+      const allRecords = await warehouseService.getGrnRecords(false, 'all');
+      const filtered = materialType ? allRecords.filter((r) => r.materialType === materialType) : allRecords;
+      const unreleasedCount = filtered.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus)).length;
+      const releasedCount = filtered.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus)).length;
+      return { unreleasedCount, releasedCount };
+    } catch {
+      return { unreleasedCount: 0, releasedCount: 0 };
+    }
   },
 
   /**
