@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to fix missing parameters for packaging materials like K1280 during QC inspection by querying packaging materials by specific codes/names rather than truncating with limit(300).",
-  "updatedAt": "2026-10-16T01:16:25.755287228Z",
+  "summary": "Implementation plan to fix raw material QC parameter lookup by increasing fetch limit to 2000 and adding cache invalidation in materialService.ts.",
+  "updatedAt": "2026-10-16T01:21:19.947271876Z",
   "requestFeedback": true,
   "userFacing": true
 }

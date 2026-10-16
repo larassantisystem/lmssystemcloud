@@ -275,12 +275,12 @@ export const materialService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // Optimized single fetch (limit 300) without multi-thousand unbounded while loop
+        // Optimized single fetch (limit 2000) without multi-thousand unbounded while loop
         const { data, error } = await supabase
           .from('raw_materials')
           .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
           .order('code', { ascending: true })
-          .limit(300);
+          .limit(2000);
 
         if (!error && data && data.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
@@ -335,6 +335,7 @@ export const materialService = {
   },
 
   saveSingleMaterial: async (item: RawMaterial): Promise<{ success: boolean; error?: string; updatedId?: string }> => {
+    materialService.invalidateCache();
     // Ensure ID is a valid UUID for PostgreSQL
     const validId = ensureUUID(item.id);
     const normalizedItem: RawMaterial = { ...item, id: validId };
@@ -450,6 +451,7 @@ export const materialService = {
   },
 
   saveMaterials: async (materials: RawMaterial[]): Promise<void> => {
+    materialService.invalidateCache();
     if (!materials || materials.length === 0) return;
     const normalizedList = materials.map((m) => ({ ...m, id: ensureUUID(m.id) }));
 
