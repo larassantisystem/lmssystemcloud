@@ -52,13 +52,28 @@ export const StockRawMaterialPage: React.FC<StockRawMaterialPageProps> = ({
   const [isRelocModalOpen, setIsRelocModalOpen] = useState(false);
   const [lotsCountNeedingReloc, setLotsCountNeedingReloc] = useState(0);
 
-  const loadStockData = async () => {
-    setIsLoading(true);
+  const [paginatedMaterials, setPaginatedMaterials] = useState<MaterialStockSummary[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoadingPage, setIsLoadingPage] = useState(false);
+
+  const fetchServerStockPage = React.useCallback(async (page: number, size: number, search: string, category: string, location: string) => {
+    setIsLoadingPage(true);
     try {
-      const data = await stockService.getStockSummaries('raw');
-      setMaterials(data);
-      
-      // Calculate lots needing relocation (passed/released in karantina)
+      const res = await stockService.getStockSummariesPaginated('raw', {
+        page,
+        pageSize: size,
+        search,
+        category: category !== 'all' ? category : undefined,
+      });
+      let items = res.items;
+      if (location && location !== 'all') {
+        items = items.filter((m) => m.storageLocation.toLowerCase() === location.toLowerCase());
+      }
+      setPaginatedMaterials(items);
+      setTotalCount(res.totalCount);
+      setTotalPages(res.totalPages);
+
       const allLots = await stockService.getStockLots();
       const count = allLots.filter(
         (l) =>
@@ -68,49 +83,35 @@ export const StockRawMaterialPage: React.FC<StockRawMaterialPageProps> = ({
       ).length;
       setLotsCountNeedingReloc(count);
     } catch (err) {
-      console.error('Error loading raw material stock:', err);
+      console.error('Error loading paginated raw material stock:', err);
     } finally {
+      setIsLoadingPage(false);
       setIsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadStockData();
   }, []);
 
-  // Filter Categories & Locations
-  const categories = Array.from(new Set(materials.map((m) => m.category).filter(Boolean)));
-  const locations = Array.from(new Set(materials.map((m) => m.storageLocation).filter(Boolean)));
+  const loadStockData = React.useCallback(() => {
+    fetchServerStockPage(currentPage, itemsPerPage, searchQuery, selectedCategory, selectedLocation);
+  }, [fetchServerStockPage, currentPage, itemsPerPage, searchQuery, selectedCategory, selectedLocation]);
 
-  const filteredMaterials = materials.filter((m) => {
-    const matchesSearch =
-      m.materialCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.storageLocation.toLowerCase().includes(searchQuery.toLowerCase());
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchServerStockPage(currentPage, itemsPerPage, searchQuery, selectedCategory, selectedLocation);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [currentPage, itemsPerPage, searchQuery, selectedCategory, selectedLocation, fetchServerStockPage]);
 
-    const matchesCategory = selectedCategory === 'all' || m.category === selectedCategory;
-    const matchesLocation = selectedLocation === 'all' || m.storageLocation === selectedLocation;
-
-    return matchesSearch && matchesCategory && matchesLocation;
-  });
-
-  // Reset page when filter changes
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, selectedCategory, selectedLocation, itemsPerPage]);
 
-  // Pagination Math
-  const totalItems = filteredMaterials.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const totalItems = totalCount;
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
-  const paginatedMaterials = filteredMaterials.slice(startIndex, endIndex);
+  const endIndex = Math.min(startIndex + paginatedMaterials.length, totalItems);
+  const categories: string[] = [];
+  const locations: string[] = [];
 
-  // Calculate Aggregates
-  const totalReleased = materials.reduce((acc, curr) => acc + curr.stockReleased, 0);
-  const totalQuarantine = materials.reduce((acc, curr) => acc + curr.stockQuarantine, 0);
-  const totalReject = materials.reduce((acc, curr) => acc + curr.stockRejected, 0);
-  const totalLots = materials.reduce((acc, curr) => acc + curr.lots.length, 0);
+
 
   return (
     <div className="space-y-4">
@@ -183,18 +184,7 @@ export const StockRawMaterialPage: React.FC<StockRawMaterialPageProps> = ({
             </button>
           </div>
 
-          {/* Quick Aggregate Stats Badges */}
-          <div className="flex items-center gap-2 text-xs">
-            <span className="px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold">
-              Rilis: {totalReleased.toLocaleString('id-ID', { minimumFractionDigits: 1 })} kg
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 font-bold">
-              Hold: {totalQuarantine.toLocaleString('id-ID', { minimumFractionDigits: 1 })} kg
-            </span>
-            <span className="px-2.5 py-1 rounded-xl bg-purple-50 text-purple-800 border border-purple-200 font-bold">
-              Total: {totalLots} Lot Aktif
-            </span>
-          </div>
+
         </div>
       </div>
 
@@ -420,8 +410,22 @@ export const StockRawMaterialPage: React.FC<StockRawMaterialPageProps> = ({
                 <ChevronLeft className="w-4 h-4" />
               </button>
 
-              <div className="px-3 py-1 font-mono font-bold text-slate-800 bg-white rounded-lg border border-slate-200">
-                Halaman {currentPage} / {totalPages}
+              <div className="flex items-center gap-1 px-2.5 py-1 font-mono font-bold text-slate-800 bg-white rounded-lg border border-slate-200 text-xs">
+                <span>Hal</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages || 1}
+                  value={currentPage}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val)) {
+                      setCurrentPage(Math.max(1, Math.min(val, totalPages || 1)));
+                    }
+                  }}
+                  className="w-10 text-center border border-slate-300 rounded px-1 py-0.5 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-purple-500"
+                />
+                <span>/ {totalPages}</span>
               </div>
 
               <button

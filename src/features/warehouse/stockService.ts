@@ -281,6 +281,128 @@ export const stockService = {
   },
 
   /**
+   * Get Summaries Paginated for 'raw' or 'packaging' to avoid heavy full-table reads and reduce row reads
+   */
+  getStockSummariesPaginated: async (
+    materialType: MaterialStockType,
+    params: { page?: number; pageSize?: number; search?: string; category?: string }
+  ): Promise<{ items: MaterialStockSummary[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = Math.max(1, params.pageSize || 20);
+    const lots = await stockService.getStockLots();
+
+    if (materialType === 'raw') {
+      const pRes = await materialService.getMaterialsPaginated({
+        page,
+        pageSize,
+        search: params.search,
+        category: params.category,
+      });
+
+      const items: MaterialStockSummary[] = pRes.items.map((rm) => {
+        const materialLots = lots.filter(
+          (l) => l.materialType === 'raw' && (l.materialCode === rm.code || l.materialName.toLowerCase() === rm.name.toLowerCase())
+        );
+
+        let stockReleased = 0;
+        let stockQuarantine = 0;
+        let stockRejected = 0;
+
+        materialLots.forEach((lot) => {
+          if (lot.qcStatus === 'RELEASED' || lot.qcStatus === 'RELEASE_DEVIATION' || (lot.qcStatus as any) === 'PASSED') {
+            stockReleased += lot.currentQuantity;
+          } else if (lot.qcStatus === 'QUARANTINE' || (lot.qcStatus as any) === 'TESTING' || (lot.qcStatus as any) === 'AWAITING_APPROVAL') {
+            stockQuarantine += lot.currentQuantity;
+          } else if (lot.qcStatus === 'REJECTED') {
+            stockRejected += lot.currentQuantity;
+          }
+        });
+
+        const totalAccumulated = stockReleased + stockQuarantine + stockRejected;
+
+        return {
+          id: rm.id,
+          materialCode: rm.code,
+          materialName: rm.name,
+          materialType: 'raw',
+          category: rm.category || (rm.categories && rm.categories[0]) || 'Raw Material',
+          storageLocation: 'Gudang Bahan Baku (Rak A)',
+          storageConditions: rm.storageConditions || 'Suhu Ruang Terkendali (15 - 25°C)',
+          unit: 'kg',
+          stockReleased,
+          stockQuarantine,
+          stockRejected,
+          totalAccumulated,
+          minimumStock: rm.reorderPoint ?? 50,
+          lots: materialLots,
+        };
+      });
+
+      return {
+        items,
+        totalCount: pRes.totalCount,
+        page,
+        pageSize,
+        totalPages: pRes.totalPages,
+      };
+    } else {
+      const pRes = await packagingService.getPackagingMaterialsPaginated({
+        page,
+        pageSize,
+        search: params.search,
+        type: params.category,
+      });
+
+      const items: MaterialStockSummary[] = pRes.items.map((pm) => {
+        const materialLots = lots.filter(
+          (l) => l.materialType === 'packaging' && (l.materialCode === pm.code || l.materialName.toLowerCase() === pm.name.toLowerCase())
+        );
+
+        let stockReleased = 0;
+        let stockQuarantine = 0;
+        let stockRejected = 0;
+
+        materialLots.forEach((lot) => {
+          if (lot.qcStatus === 'RELEASED' || lot.qcStatus === 'RELEASE_DEVIATION' || (lot.qcStatus as any) === 'PASSED') {
+            stockReleased += lot.currentQuantity;
+          } else if (lot.qcStatus === 'QUARANTINE' || (lot.qcStatus as any) === 'TESTING' || (lot.qcStatus as any) === 'AWAITING_APPROVAL') {
+            stockQuarantine += lot.currentQuantity;
+          } else if (lot.qcStatus === 'REJECTED') {
+            stockRejected += lot.currentQuantity;
+          }
+        });
+
+        const totalAccumulated = stockReleased + stockQuarantine + stockRejected;
+
+        return {
+          id: pm.id,
+          materialCode: pm.code,
+          materialName: pm.name,
+          materialType: 'packaging',
+          category: pm.type ? `${pm.type.toUpperCase()} PACKAGING` : 'Packaging',
+          storageLocation: pm.storageLocation || 'Gudang Bahan Kemas (Area BK)',
+          storageConditions: pm.storageConditions || 'Suhu Ruang Terkendali (15 - 25°C)',
+          unit: pm.unit || 'pcs',
+          stockReleased,
+          stockQuarantine,
+          stockRejected,
+          totalAccumulated,
+          minimumStock: pm.reorderPoint ?? 100,
+          lots: materialLots,
+        };
+      });
+
+      return {
+        items,
+        totalCount: pRes.totalCount,
+        page,
+        pageSize,
+        totalPages: pRes.totalPages,
+      };
+    }
+  },
+
+  /**
    * Get Stock Ledger movement history (Prioritas: tabel public.stock_movements Supabase Opsi 2)
    */
   getMovementLedger: async (forceRefresh = false): Promise<StockMovementLedger[]> => {

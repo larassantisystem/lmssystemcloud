@@ -1603,10 +1603,24 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
                   &lsaquo; Sblm
                 </button>
 
-                {/* Badge Indikator Halaman */}
-                <span className="px-3 py-1 bg-purple-50 border border-purple-200 text-purple-800 rounded-lg text-xs font-bold font-mono">
-                  {currentPage} / {totalPages}
-                </span>
+                {/* Badge Indikator Halaman dengan Input */}
+                <div className="flex items-center gap-1 px-2.5 py-1 bg-purple-50 border border-purple-200 text-purple-800 rounded-lg text-xs font-bold font-mono">
+                  <span>Hal</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages || 1}
+                    value={currentPage}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val)) {
+                        setCurrentPage(Math.max(1, Math.min(val, totalPages || 1)));
+                      }
+                    }}
+                    className="w-10 text-center border border-purple-300 rounded px-1 py-0.5 text-xs font-bold bg-white text-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-500"
+                  />
+                  <span>/ {totalPages}</span>
+                </div>
 
                 <button
                   type="button"

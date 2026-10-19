@@ -275,14 +275,33 @@ export const materialService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // Optimized single fetch (limit 2000) without multi-thousand unbounded while loop
-        const { data, error } = await supabase
-          .from('raw_materials')
-          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
-          .order('code', { ascending: true })
-          .limit(2000);
+        let allData: any[] = [];
+        let page = 0;
+        const pageSize = 1000;
+        let hasMore = true;
 
-        if (!error && data && data.length > 0) {
+        while (hasMore) {
+          const from = page * pageSize;
+          const to = from + pageSize - 1;
+          const { data, error } = await supabase
+            .from('raw_materials')
+            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
+            .order('code', { ascending: true })
+            .range(from, to);
+
+          if (error || !data || data.length === 0) {
+            hasMore = false;
+          } else {
+            allData = allData.concat(data);
+            if (data.length < pageSize) {
+              hasMore = false;
+            } else {
+              page++;
+            }
+          }
+        }
+
+        if (allData.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
             if (Array.isArray(val)) return val;
             if (typeof val === 'string' && val.trim()) {
@@ -294,7 +313,7 @@ export const materialService = {
             return fallback;
           };
 
-          const mapped: RawMaterial[] = data.map((m: any) => {
+          const mapped: RawMaterial[] = allData.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
               ? rawCats 
@@ -503,6 +522,7 @@ export const materialService = {
   },
 
   deleteMaterial: async (id: string, code?: string): Promise<void> => {
+    materialService.invalidateCache();
     const validId = ensureUUID(id);
     inMemoryRawMaterials = inMemoryRawMaterials.filter((r) => r.id !== id && r.id !== validId && (!code || r.code !== code));
 

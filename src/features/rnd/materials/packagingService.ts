@@ -214,14 +214,33 @@ export const packagingService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // Optimized single fetch (limit 2000) without multi-thousand unbounded while loop
-        const { data, error } = await supabase
-          .from('packaging_materials')
-          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
-          .order('code', { ascending: true })
-          .limit(2000);
+        let allData: any[] = [];
+        let page = 0;
+        const pageSize = 1000;
+        let hasMore = true;
 
-        if (!error && data && data.length > 0) {
+        while (hasMore) {
+          const from = page * pageSize;
+          const to = from + pageSize - 1;
+          const { data, error } = await supabase
+            .from('packaging_materials')
+            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
+            .order('code', { ascending: true })
+            .range(from, to);
+
+          if (error || !data || data.length === 0) {
+            hasMore = false;
+          } else {
+            allData = allData.concat(data);
+            if (data.length < pageSize) {
+              hasMore = false;
+            } else {
+              page++;
+            }
+          }
+        }
+
+        if (allData.length > 0) {
           const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
             if (Array.isArray(val)) return val;
             if (typeof val === 'string' && val.trim()) {
@@ -233,7 +252,7 @@ export const packagingService = {
             return fallback;
           };
 
-          const mapped: PackagingMaterial[] = data.map((p: any) => ({
+          const mapped: PackagingMaterial[] = allData.map((p: any) => ({
             id: p.id,
             code: p.code,
             specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
@@ -427,6 +446,7 @@ export const packagingService = {
   },
 
   deletePackagingMaterial: async (id: string, code?: string): Promise<void> => {
+    packagingService.invalidateCache();
     const validId = ensureUUID(id);
     inMemoryPackaging = inMemoryPackaging.filter((p) => p.id !== id && p.id !== validId && (!code || p.code !== code));
 

@@ -21,6 +21,8 @@ import { analyzeLabResults } from '../utils/qcAiAssistant';
 import { calculateAutoRetestDate, getUserJabatan } from '../utils/qcNumbering';
 import { useAuth } from '../../../core/auth/AuthContext';
 import { warehouseService } from '../../warehouse/warehouseService';
+import { packagingService } from '../../rnd/materials/packagingService';
+import { materialService } from '../../rnd/materials/materialService';
 import { CoaViewerModal } from '../../warehouse/components/CoaViewerModal';
 import { useEscapeKey } from '../../../core/utils/useEscapeKey';
 
@@ -92,11 +94,68 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
 
   useEffect(() => {
     if (report) {
-      setParameters(
-        report.parameters && report.parameters.length > 0
-          ? JSON.parse(JSON.stringify(report.parameters))
-          : []
-      );
+      const initialParams = report.parameters && report.parameters.length > 0
+        ? JSON.parse(JSON.stringify(report.parameters))
+        : [];
+      setParameters(initialParams);
+
+      // If parameters list is empty in the report, immediately resolve from Master Data (Bagian B)
+      if (initialParams.length === 0) {
+        const isPackaging = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((report.materialType || '').trim().toLowerCase()) ||
+          (report.materialType || '').toLowerCase().includes('kemas') ||
+          (report.materialType || '').toLowerCase().includes('pack');
+        const cleanCode = (report.materialCode || '').trim().toLowerCase();
+        const cleanName = (report.materialName || '').trim().toLowerCase();
+
+        if (isPackaging) {
+          packagingService.getPackagingMaterials().then((pms) => {
+            const matched = pms.find((pm) => {
+              const pmCode = (pm.code || '').trim().toLowerCase();
+              const pmName = (pm.name || '').trim().toLowerCase();
+              return (cleanCode && pmCode === cleanCode) ||
+                     (cleanName && (pmName === cleanName || pmName.includes(cleanName) || cleanName.includes(pmName)));
+            });
+            if (matched?.qcParameters && matched.qcParameters.length > 0) {
+              const mapped = matched.qcParameters
+                .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+                .map((p, idx) => ({
+                  id: `param-${Date.now()}-${idx}`,
+                  parameterName: (p.name || p.parameterName || 'Parameter').trim(),
+                  specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+                  resultValue: '',
+                  isCompliant: true,
+                }));
+              if (mapped.length > 0) {
+                setParameters(mapped);
+              }
+            }
+          }).catch(console.error);
+        } else {
+          materialService.getMaterials().then((rms) => {
+            const matched = rms.find((rm) => {
+              const rmCode = (rm.code || '').trim().toLowerCase();
+              const rmName = (rm.name || '').trim().toLowerCase();
+              return (cleanCode && rmCode === cleanCode) ||
+                     (cleanName && (rmName === cleanName || rmName.includes(cleanName) || cleanName.includes(rmName)));
+            });
+            if (matched?.qcParameters && matched.qcParameters.length > 0) {
+              const mapped = matched.qcParameters
+                .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+                .map((p, idx) => ({
+                  id: `param-${Date.now()}-${idx}`,
+                  parameterName: (p.name || p.parameterName || 'Parameter').trim(),
+                  specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+                  resultValue: '',
+                  isCompliant: true,
+                }));
+              if (mapped.length > 0) {
+                setParameters(mapped);
+              }
+            }
+          }).catch(console.error);
+        }
+      }
+
       setStaffDecision(report.staffDecision || 'RELEASE');
       setStaffNotes(report.staffNotes || '');
 

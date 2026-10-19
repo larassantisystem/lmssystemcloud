@@ -1127,9 +1127,23 @@ export const EmployeeManagementModule: React.FC<EmployeeManagementModuleProps> =
                         >
                           Prev
                         </button>
-                        <span className="text-slate-700 font-bold text-[10px] px-1.5">
-                          {currentPage} / {totalPages}
-                        </span>
+                        <div className="flex items-center gap-1 text-[10px] font-bold text-slate-700 px-1">
+                          <span>Hal</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={totalPages || 1}
+                            value={currentPage}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              if (!isNaN(val)) {
+                                setAuditPage(Math.max(1, Math.min(val, totalPages || 1)));
+                              }
+                            }}
+                            className="w-8 text-center border border-slate-300 rounded px-0.5 py-0.5 text-[10px] font-bold focus:outline-none focus:ring-1 focus:ring-purple-500"
+                          />
+                          <span>/ {totalPages}</span>
+                        </div>
                         <button
                           type="button"
                           disabled={currentPage === totalPages}

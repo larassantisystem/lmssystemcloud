@@ -125,8 +125,11 @@ export const qualityService = {
         });
         if (matchedPM?.qcParameters && matchedPM.qcParameters.length > 0) {
           resolvedParams = matchedPM.qcParameters
-            .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+            }));
         }
       } else {
         const matchedRM = rawMaterials.find((rm) => {
@@ -137,8 +140,11 @@ export const qualityService = {
         });
         if (matchedRM?.qcParameters && matchedRM.qcParameters.length > 0) {
           resolvedParams = matchedRM.qcParameters
-            .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+            }));
         }
       }
 
@@ -498,20 +504,22 @@ export const qualityService = {
         }
 
         // Live Synchronization with Master Bahan Kemas / Bahan Baku (Bagian B)
-        // If the report is in QUARANTINE (untested), ensure all criteria from Master Data are fully synced
-        if (existingReport.status === 'QUARANTINE') {
-          const isParameterCountMismatch = existingReport.parameters.length !== effectiveParamTemplates.length;
+        // If the report is in QUARANTINE, QUALITY_CONTROL_PROCESS, or has empty parameters, ensure criteria from Master Data are fully synced
+        const shouldSyncMasterParams = (existingReport.status === 'QUARANTINE' || existingReport.status === 'QUALITY_CONTROL_PROCESS' || !existingReport.parameters || existingReport.parameters.length === 0) && effectiveParamTemplates.length > 0;
+        if (shouldSyncMasterParams) {
+          const currentParams = existingReport.parameters || [];
+          const isParameterCountMismatch = currentParams.length !== effectiveParamTemplates.length;
           const isNameMismatch = effectiveParamTemplates.some(
-            (ep, idx) => existingReport.parameters[idx]?.parameterName !== ep.name
+            (ep, idx) => currentParams[idx]?.parameterName !== ep.name
           );
 
-          if (isParameterCountMismatch || isNameMismatch) {
+          if (isParameterCountMismatch || isNameMismatch || currentParams.length === 0) {
             existingReport.parameters = effectiveParamTemplates.map((item, idx) => ({
               id: `param-${Date.now()}-${idx}`,
               parameterName: item.name,
               specification: item.spec,
-              resultValue: existingReport.parameters.find(p => p.parameterName === item.name)?.resultValue || '',
-              isCompliant: existingReport.parameters.find(p => p.parameterName === item.name)?.isCompliant ?? true,
+              resultValue: currentParams.find(p => p.parameterName === item.name)?.resultValue || '',
+              isCompliant: currentParams.find(p => p.parameterName === item.name)?.isCompliant ?? true,
             }));
             needsUpdate = true;
           }
@@ -774,18 +782,62 @@ export const qualityService = {
     const rawMaterials = await materialService.getMaterials(true);
     
     let masterParams: Array<{ name: string; spec: string }> = [];
-    if (report.materialType === 'packaging') {
-      const pm = packagingMaterials.find(m => m.code === report.materialCode || m.name === report.materialName);
-      if (pm?.qcParameters) masterParams = pm.qcParameters.filter(p => p.name).map(p => ({ name: p.name!, spec: p.specification || '' }));
+    const isPackagingType = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((report.materialType || '').trim().toLowerCase()) ||
+      (report.materialType || '').toLowerCase().includes('kemas') ||
+      (report.materialType || '').toLowerCase().includes('pack');
+    const cleanCode = (report.materialCode || '').trim().toLowerCase();
+    const cleanName = (report.materialName || '').trim().toLowerCase();
+
+    if (isPackagingType) {
+      const pm = packagingMaterials.find(m => {
+        const pmCode = (m.code || '').trim().toLowerCase();
+        const pmName = (m.name || '').trim().toLowerCase();
+        return (cleanCode && pmCode === cleanCode) ||
+               (cleanName && (pmName === cleanName || pmName.includes(cleanName) || cleanName.includes(pmName)));
+      });
+      if (pm?.qcParameters && pm.qcParameters.length > 0) {
+        masterParams = pm.qcParameters
+          .filter(p => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+          .map(p => ({
+            name: (p.name || p.parameterName || 'Parameter').trim(),
+            spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu'
+          }));
+      }
     } else {
-      const rm = rawMaterials.find(m => m.code === report.materialCode || m.name === report.materialName);
-      if (rm?.qcParameters) masterParams = rm.qcParameters.filter(p => p.name).map(p => ({ name: p.name!, spec: p.specification || '' }));
+      const rm = rawMaterials.find(m => {
+        const rmCode = (m.code || '').trim().toLowerCase();
+        const rmName = (m.name || '').trim().toLowerCase();
+        return (cleanCode && rmCode === cleanCode) ||
+               (cleanName && (rmName === cleanName || rmName.includes(cleanName) || cleanName.includes(rmName)));
+      });
+      if (rm?.qcParameters && rm.qcParameters.length > 0) {
+        masterParams = rm.qcParameters
+          .filter(p => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+          .map(p => ({
+            name: (p.name || p.parameterName || 'Parameter').trim(),
+            spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu'
+          }));
+      }
     }
 
-    // Filter submitted parameters to ONLY those in masterParams
-    report.parameters = parameters.filter(p => 
-      masterParams.some(mp => mp.name.trim().toLowerCase() === p.parameterName.trim().toLowerCase())
-    );
+    // Retain submitted parameters mapped to master parameters, or preserve submitted parameters
+    if (masterParams.length > 0) {
+      report.parameters = masterParams.map((mp, idx) => {
+        const matchedSubmitted = parameters.find(
+          p => p.parameterName.trim().toLowerCase() === mp.name.toLowerCase()
+        );
+        return {
+          id: matchedSubmitted?.id || `param-${Date.now()}-${idx}`,
+          parameterName: mp.name,
+          specification: mp.spec,
+          resultValue: matchedSubmitted?.resultValue || '',
+          isCompliant: matchedSubmitted?.isCompliant ?? true,
+          notes: matchedSubmitted?.notes || '',
+        };
+      });
+    } else {
+      report.parameters = parameters;
+    }
 
     report.staffDecision = staffDecision;
     report.staffNotes = staffNotes || '';
@@ -1231,23 +1283,45 @@ export const qualityService = {
 
     for (const rep of targetReports) {
       let masterParams: Array<{ name: string; spec: string }> = [];
-      if (rep.materialType === 'packaging') {
+      const isPackagingType = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((rep.materialType || '').trim().toLowerCase()) ||
+        (rep.materialType || '').toLowerCase().includes('kemas') ||
+        (rep.materialType || '').toLowerCase().includes('pack');
+      const cleanCode = (rep.materialCode || '').trim().toLowerCase();
+      const cleanName = (rep.materialName || '').trim().toLowerCase();
+
+      if (isPackagingType) {
         const pm = packagingMaterials.find(
-          (p) => p.code === rep.materialCode || p.name.toLowerCase() === rep.materialName.toLowerCase()
+          (p) => {
+            const pCode = (p.code || '').trim().toLowerCase();
+            const pName = (p.name || '').trim().toLowerCase();
+            return (cleanCode && pCode === cleanCode) ||
+                   (cleanName && (pName === cleanName || pName.includes(cleanName) || cleanName.includes(pName)));
+          }
         );
         if (pm?.qcParameters && pm.qcParameters.length > 0) {
           masterParams = pm.qcParameters
-            .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu'
+            }));
         }
       } else {
         const rm = rawMaterials.find(
-          (r) => r.code === rep.materialCode || r.name.toLowerCase() === rep.materialName.toLowerCase()
+          (r) => {
+            const rCode = (r.code || '').trim().toLowerCase();
+            const rName = (r.name || '').trim().toLowerCase();
+            return (cleanCode && rCode === cleanCode) ||
+                   (cleanName && (rName === cleanName || rName.includes(cleanName) || cleanName.includes(rName)));
+          }
         );
         if (rm?.qcParameters && rm.qcParameters.length > 0) {
           masterParams = rm.qcParameters
-            .filter((p) => p.name && p.name.trim())
-            .map((p) => ({ name: p.name || 'Parameter', spec: p.specification || 'Sesuai Standar Spesifikasi Mutu' }));
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              spec: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu'
+            }));
         }
       }
 
