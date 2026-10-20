@@ -42,6 +42,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await login(nik, 'password123');
   };
 
+  // Auto-logout after 5 minutes of inactivity
+  useEffect(() => {
+    let logoutTimer: NodeJS.Timeout;
+
+    const resetTimer = () => {
+      clearTimeout(logoutTimer);
+      logoutTimer = setTimeout(() => {
+        if (user) {
+          logout();
+        }
+      }, 5 * 60 * 1000); // 5 minutes
+    };
+
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+    events.forEach((event) => document.addEventListener(event, resetTimer));
+
+    resetTimer(); // Start timer on mount
+
+    return () => {
+      events.forEach((event) => document.removeEventListener(event, resetTimer));
+      clearTimeout(logoutTimer);
+    };
+  }, [user]);
+
   return (
     <AuthContext.Provider
       value={{
