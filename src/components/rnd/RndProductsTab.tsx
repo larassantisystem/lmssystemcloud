@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, Fragment } from 'react';
+import React, { useState, useRef, useEffect, useCallback, Fragment, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { Product, ProductVariant, BulkFormulation, PackagingMaterial, QCParameter } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
@@ -1100,7 +1100,7 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
     setShowVariantModal(true);
   };
 
-  const handleOpenEditVariant = (prodId: string, variant: ProductVariant) => {
+  const handleOpenEditVariant = async (prodId: string, variant: ProductVariant) => {
     setTargetProductId(prodId);
     setEditingVariant(variant);
     setVarCode(variant.variantCode || variant.sku);
@@ -1116,6 +1116,17 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
     setVarBarcode(variant.barcode || '');
     setVarDesc(variant.description || '');
     setShowVariantModal(true);
+
+    // Ambil packaging BOM varian secara on-demand dari Supabase
+    try {
+      const fullVar = await productService.getVariantDetail(variant.id);
+      if (fullVar && fullVar.packagingBom && fullVar.packagingBom.length > 0) {
+        setEditingVariant(fullVar);
+        setVarPackagingBom([...fullVar.packagingBom]);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat BOM kemasan varian on-demand:', e);
+    }
   };
 
   const handleSaveVariantForm = (e: React.FormEvent) => {
@@ -1149,42 +1160,16 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
     setTimeout(() => setSuccessToast(null), 5000);
   };
 
-  const filteredProducts = products.filter((p) => {
-    // 1. Filter Tab EXP NA < 6 Bulan
-    if (activeExpFilterTab === 'expiring_soon') {
-      const expInfo = getBpomExpInfo(p);
-      if (!expInfo.isAttentionNeeded) return false;
-    }
+  const filteredProducts = useMemo(() => serverProducts, [serverProducts]);
 
-    const query = searchQuery.toLowerCase();
-    const matchParent =
-      p.code.toLowerCase().includes(query) ||
-      p.name.toLowerCase().includes(query) ||
-      p.category.toLowerCase().includes(query) ||
-      p.brand.toLowerCase().includes(query) ||
-      (p.bpomNotificationNumber && p.bpomNotificationNumber.toLowerCase().includes(query)) ||
-      (p.expNotificationDate && p.expNotificationDate.toLowerCase().includes(query));
-
-    const matchVariant = p.variants.some(
-      (v) =>
-        v.variantCode.toLowerCase().includes(query) ||
-        v.variantName.toLowerCase().includes(query) ||
-        (v.bpomNumber && v.bpomNumber.toLowerCase().includes(query)) ||
-        (v.barcode && v.barcode.toLowerCase().includes(query)) ||
-        (v.sku && v.sku.toLowerCase().includes(query))
-    );
-
-    return matchParent || matchVariant;
-  });
-
-  const totalVariantsCount = products.reduce((sum, p) => sum + p.variants.length, 0);
+  const totalVariantsCount = 0; // Simplified for paginated view
 
   // Pagination Calculations (Default 50 per page)
-  const displayTotal = isServerPaged ? totalCount : filteredProducts.length;
+  const displayTotal = isServerPaged ? totalCount : 0;
   const totalPages = Math.ceil(displayTotal / itemsPerPage) || 1;
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = Math.min(startIndex + itemsPerPage, displayTotal);
-  const paginatedProducts = isServerPaged ? serverProducts : filteredProducts.slice(startIndex, endIndex);
+  const paginatedProducts = isServerPaged ? serverProducts : [];
 
   return (
     <div className="space-y-6 font-sans">

@@ -5,7 +5,22 @@ import { ensureUUID } from '../../../utils/uuid';
 // In-memory cache untuk performa UI & efisiensi EGRESS Supabase (BUKAN local storage)
 let inMemoryRawMaterials: RawMaterial[] = [];
 let lastFetchTime = 0;
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 menit cache di RAM browser untuk menghemat egress
+let cachedTotalCount: number | null = null;
+let lastCountFetchTime = 0;
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM browser untuk menghemat egress
+const paginatedCache = new Map<string, { timestamp: number; result: any }>();
+const materialDetailCache = new Map<string, { timestamp: number; data: RawMaterial }>();
+
+const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return fallback;
+};
 
 // Bersihkan data lama jika ada di browser
 if (typeof window !== 'undefined' && window.localStorage) {
@@ -19,6 +34,9 @@ if (typeof window !== 'undefined' && window.localStorage) {
 export const materialService = {
   invalidateCache: () => {
     lastFetchTime = 0;
+    cachedTotalCount = null;
+    paginatedCache.clear();
+    materialDetailCache.clear();
   },
 
   checkConnection: async (): Promise<{ configured: boolean; connected: boolean; message: string }> => {
@@ -57,19 +75,24 @@ export const materialService = {
   },
 
   getMaterialsCount: async (): Promise<number> => {
+    if (cachedTotalCount !== null && (Date.now() - lastCountFetchTime < CACHE_TTL_MS)) {
+      return cachedTotalCount;
+    }
     if (isSupabaseConfigured && supabase) {
       try {
         const { count, error } = await supabase
           .from('raw_materials')
           .select('id', { count: 'exact', head: true });
         if (!error && typeof count === 'number') {
+          cachedTotalCount = count;
+          lastCountFetchTime = Date.now();
           return count;
         }
       } catch (err) {
         console.warn('[materialService] count error:', err);
       }
     }
-    return inMemoryRawMaterials.length;
+    return cachedTotalCount ?? inMemoryRawMaterials.length;
   },
 
   getMaterialsPaginated: async (params: {
@@ -80,9 +103,16 @@ export const materialService = {
   }): Promise<{ items: RawMaterial[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
     const page = Math.max(1, params.page || 1);
     const pageSize = Math.max(1, params.pageSize || 50);
+    const cacheKey = `${page}-${pageSize}-${params.search || ''}-${params.category || 'all'}`;
+    const cached = paginatedCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.result;
+    }
+
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
+    const queryTo = from + pageSize; // fetch pageSize + 1 items to check if there is a next page
     const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
       if (Array.isArray(val)) return val;
       if (typeof val === 'string' && val.trim()) {
@@ -98,7 +128,7 @@ export const materialService = {
       try {
         let query = supabase
           .from('raw_materials')
-          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at', { count: 'exact' });
+          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions');
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -109,12 +139,14 @@ export const materialService = {
           query = query.or(`category.eq.${params.category},categories.ilike.%${params.category}%`);
         }
 
-        query = query.order('code', { ascending: true }).range(from, to);
+        query = query.order('code', { ascending: true }).range(from, queryTo);
 
-        const { data, count, error } = await query;
+        const { data, error } = await query;
 
         if (!error && data) {
-          const mapped: RawMaterial[] = data.map((m: any) => {
+          const hasMore = data.length > pageSize;
+          const rawItems = hasMore ? data.slice(0, pageSize) : data;
+          const mapped: RawMaterial[] = rawItems.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
               ? rawCats 
@@ -130,27 +162,29 @@ export const materialService = {
               categories: resolvedCategories,
               otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
               storageConditions: m.storage_conditions || m.storageConditions || '',
-              sdsDocNumber: m.sds_doc_number || m.sdsDocNumber || '',
-              sdsFileUrl: m.sds_file_url || m.sdsFileUrl,
-              sdsFileName: m.sds_file_name || m.sdsFileName,
-              approvedSubstitutes: parseJsonArray(m.approved_substitutes || m.approvedSubstitutes, []),
+              sdsDocNumber: '',
+              sdsFileUrl: undefined,
+              sdsFileName: undefined,
+              approvedSubstitutes: [],
               manufacturer: m.manufacturer || '',
-              qcParameters: parseJsonArray(m.qc_parameters || m.qcParameters, []),
-              supplierLeadTimeDays: m.supplier_lead_time_days ?? m.supplierLeadTimeDays ?? 14,
-              reorderPoint: m.reorder_point ?? m.reorderPoint ?? 50,
-              lastModifiedBy: m.last_modified_by || m.lastModifiedBy,
-              lastModifiedAt: m.last_modified_at || m.lastModifiedAt,
+              qcParameters: [],
+              supplierLeadTimeDays: 14,
+              reorderPoint: 50,
+              lastModifiedBy: m.last_modified_by,
+              lastModifiedAt: m.last_modified_at,
             };
           });
 
-          const totalCount = count !== undefined && count !== null ? count : mapped.length;
-          return {
+          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
+          const result = {
             items: mapped,
             totalCount,
             page,
             pageSize,
             totalPages: Math.ceil(totalCount / pageSize) || 1,
           };
+          paginatedCache.set(cacheKey, { timestamp: Date.now(), result });
+          return result;
         }
       } catch (err) {
         console.warn('[materialService] paginated query exception:', err);
@@ -183,6 +217,12 @@ export const materialService = {
   },
 
   getMaterialById: async (id: string): Promise<RawMaterial | null> => {
+    if (!id) return null;
+    const cached = materialDetailCache.get(id);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
+    }
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
@@ -205,7 +245,7 @@ export const materialService = {
           const rawCats = parseJsonArray<string>(data.categories, []);
           const resolvedCategories = rawCats.length > 0 ? rawCats : (data.category ? [data.category] : ['active']);
 
-          return {
+          const fullItem: RawMaterial = {
             id: data.id,
             code: data.code,
             specNumber: data.spec_number || `SP-BB-${data.code}`,
@@ -226,6 +266,9 @@ export const materialService = {
             lastModifiedBy: data.last_modified_by,
             lastModifiedAt: data.last_modified_at,
           };
+
+          materialDetailCache.set(id, { timestamp: Date.now(), data: fullItem });
+          return fullItem;
         }
       } catch (err) {
         console.warn('[materialService] getMaterialById exception:', err);
@@ -285,7 +328,7 @@ export const materialService = {
           const to = from + pageSize - 1;
           const { data, error } = await supabase
             .from('raw_materials')
-            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, storage_conditions, sds_doc_number, sds_file_url, sds_file_name, approved_substitutes, manufacturer, qc_parameters, supplier_lead_time_days, reorder_point, last_modified_by, last_modified_at')
+            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions')
             .order('code', { ascending: true })
             .range(from, to);
 
@@ -302,17 +345,6 @@ export const materialService = {
         }
 
         if (allData.length > 0) {
-          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
-            if (Array.isArray(val)) return val;
-            if (typeof val === 'string' && val.trim()) {
-              try {
-                const parsed = JSON.parse(val);
-                if (Array.isArray(parsed)) return parsed;
-              } catch {}
-            }
-            return fallback;
-          };
-
           const mapped: RawMaterial[] = allData.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
@@ -329,16 +361,16 @@ export const materialService = {
               categories: resolvedCategories,
               otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
               storageConditions: m.storage_conditions || m.storageConditions || '',
-              sdsDocNumber: m.sds_doc_number || m.sdsDocNumber || '',
-              sdsFileUrl: m.sds_file_url || m.sdsFileUrl,
-              sdsFileName: m.sds_file_name || m.sdsFileName,
-              approvedSubstitutes: parseJsonArray(m.approved_substitutes || m.approvedSubstitutes, []),
+              sdsDocNumber: '',
+              sdsFileUrl: undefined,
+              sdsFileName: undefined,
+              approvedSubstitutes: [],
               manufacturer: m.manufacturer || '',
-              qcParameters: parseJsonArray(m.qc_parameters || m.qcParameters, []),
-              supplierLeadTimeDays: m.supplier_lead_time_days ?? m.supplierLeadTimeDays ?? 14,
-              reorderPoint: m.reorder_point ?? m.reorderPoint ?? 50,
-              lastModifiedBy: m.last_modified_by || m.lastModifiedBy,
-              lastModifiedAt: m.last_modified_at || m.lastModifiedAt,
+              qcParameters: [],
+              supplierLeadTimeDays: 14,
+              reorderPoint: 50,
+              lastModifiedBy: m.last_modified_by,
+              lastModifiedAt: m.last_modified_at,
             };
           });
           inMemoryRawMaterials = mapped;

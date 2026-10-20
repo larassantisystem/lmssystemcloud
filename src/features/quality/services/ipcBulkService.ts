@@ -275,9 +275,9 @@ export const ipcBulkService = {
     }
 
     try {
-      const { data, error, count } = await supabase
+      const { data, error } = await supabase
         .from('ipc_bulk_batches')
-        .select('id, batch_no, product_name, mixing_qty_kg, status, origin', { count: 'exact' });
+        .select('id, batch_no, product_name, mixing_qty_kg, status, origin');
 
       if (error) {
         return {
@@ -307,7 +307,7 @@ export const ipcBulkService = {
 
       return {
         timestamp: auditTime,
-        totalRecordsInSupabase: count || verified.length,
+        totalRecordsInSupabase: verified.length,
         recordsVerified: verified,
         supabaseConnected: true,
         statusMessage: `Audit Sukses: Terverifikasi ${verified.length} record batch ruahan tersimpan konsisten di Supabase.`,

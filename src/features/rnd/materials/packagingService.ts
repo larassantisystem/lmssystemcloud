@@ -5,7 +5,22 @@ import { ensureUUID } from '../../../utils/uuid';
 // In-memory cache untuk performa UI & efisiensi EGRESS Supabase (BUKAN local storage)
 let inMemoryPackaging: PackagingMaterial[] = [];
 let lastFetchTime = 0;
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 menit cache di RAM browser untuk menghemat egress
+let cachedTotalCount: number | null = null;
+let lastCountFetchTime = 0;
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM browser untuk menghemat egress
+const paginatedCache = new Map<string, { timestamp: number; result: any }>();
+const detailCache = new Map<string, { timestamp: number; data: PackagingMaterial }>();
+
+const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'string' && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  }
+  return fallback;
+};
 
 // Bersihkan data lama jika ada di browser
 if (typeof window !== 'undefined' && window.localStorage) {
@@ -18,20 +33,59 @@ if (typeof window !== 'undefined' && window.localStorage) {
 
 export const packagingService = {
   getPackagingMaterialDetail: async (id: string): Promise<PackagingMaterial | null> => {
-    if (!isSupabaseConfigured || !supabase) return null;
-    const { data, error } = await supabase
-      .from('packaging_materials')
-      .select('*')
-      .eq('id', id)
-      .single();
-    if (error) {
-      console.error('[packagingService] Error fetching detail:', error);
-      return null;
+    if (!id) return null;
+    const cached = detailCache.get(id);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.data;
     }
-    return data;
+
+    if (!isSupabaseConfigured || !supabase) {
+      return inMemoryPackaging.find(p => p.id === id) || null;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('packaging_materials')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error || !data) {
+        console.error('[packagingService] Error fetching detail:', error);
+        return inMemoryPackaging.find(p => p.id === id) || null;
+      }
+
+      const fullItem: PackagingMaterial = {
+        id: data.id,
+        code: data.code,
+        specNumber: data.spec_number || data.specNumber || `SP-BK-${data.code}`,
+        name: data.name,
+        type: data.type || 'primary',
+        unit: data.unit || 'Pcs',
+        unitCapacityGrams: data.unit_capacity_grams ?? data.unitCapacityGrams,
+        supplier: data.supplier || data.manufacturer || '',
+        manufacturer: data.manufacturer || data.supplier || '',
+        storageLocation: data.storage_location || data.storageLocation || '',
+        storageConditions: data.storage_conditions || data.storageConditions || '',
+        qcParameters: parseJsonArray(data.qc_parameters || data.qcParameters, []),
+        reorderPoint: data.reorder_point ?? data.reorderPoint ?? 100,
+        lastModifiedBy: data.last_modified_by || data.lastModifiedBy,
+        lastModifiedAt: data.last_modified_at || data.lastModifiedAt,
+      };
+
+      detailCache.set(id, { timestamp: Date.now(), data: fullItem });
+      return fullItem;
+    } catch (err) {
+      console.warn('[packagingService] Exception fetching detail:', err);
+      return inMemoryPackaging.find(p => p.id === id) || null;
+    }
   },
+
   invalidateCache: () => {
     lastFetchTime = 0;
+    cachedTotalCount = null;
+    paginatedCache.clear();
+    detailCache.clear();
   },
 
   checkConnection: async (): Promise<{ configured: boolean; connected: boolean; message: string }> => {
@@ -70,19 +124,24 @@ export const packagingService = {
   },
 
   getPackagingMaterialsCount: async (): Promise<number> => {
+    if (cachedTotalCount !== null && (Date.now() - lastCountFetchTime < CACHE_TTL_MS)) {
+      return cachedTotalCount;
+    }
     if (isSupabaseConfigured && supabase) {
       try {
         const { count, error } = await supabase
           .from('packaging_materials')
           .select('id', { count: 'exact', head: true });
         if (!error && typeof count === 'number') {
+          cachedTotalCount = count;
+          lastCountFetchTime = Date.now();
           return count;
         }
       } catch (err) {
         console.warn('[packagingService] count error:', err);
       }
     }
-    return inMemoryPackaging.length;
+    return cachedTotalCount ?? inMemoryPackaging.length;
   },
 
   getPackagingMaterialsPaginated: async (params: {
@@ -95,6 +154,13 @@ export const packagingService = {
     const pageSize = Math.max(1, params.pageSize || 50);
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
+
+    const queryTo = from + pageSize; // fetch pageSize + 1 items to check if there is a next page
+    const cacheKey = `${page}-${pageSize}-${params.search || ''}-${params.type || 'all'}`;
+    const cached = paginatedCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+      return cached.result;
+    }
 
     const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
       if (Array.isArray(val)) return val;
@@ -111,7 +177,7 @@ export const packagingService = {
       try {
         let query = supabase
           .from('packaging_materials')
-          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, reorder_point, qc_parameters, last_modified_by, last_modified_at', { count: 'exact' });
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions');
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -122,12 +188,14 @@ export const packagingService = {
           query = query.eq('type', params.type);
         }
 
-        query = query.order('code', { ascending: true }).range(from, to);
+        query = query.order('code', { ascending: true }).range(from, queryTo);
 
-        const { data, count, error } = await query;
+        const { data, error } = await query;
 
         if (!error && data) {
-          const mapped: PackagingMaterial[] = data.map((p: any) => ({
+          const hasMore = data.length > pageSize;
+          const rawItems = hasMore ? data.slice(0, pageSize) : data;
+          const mapped: PackagingMaterial[] = rawItems.map((p: any) => ({
             id: p.id,
             code: p.code,
             specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
@@ -137,22 +205,24 @@ export const packagingService = {
             unitCapacityGrams: p.unit_capacity_grams ?? p.unitCapacityGrams,
             supplier: p.supplier || p.manufacturer || '',
             manufacturer: p.manufacturer || p.supplier || '',
-            storageLocation: p.storage_location || p.storageLocation || '',
+            storageLocation: p.storage_location || '',
             storageConditions: p.storage_conditions || p.storageConditions || '',
-            qcParameters: parseJsonArray(p.qc_parameters || p.qcParameters, []),
-            reorderPoint: p.reorder_point ?? p.reorderPoint ?? 100,
-            lastModifiedBy: p.last_modified_by || p.lastModifiedBy,
-            lastModifiedAt: p.last_modified_at || p.lastModifiedAt,
+            qcParameters: [],
+            reorderPoint: p.reorder_point ?? 100,
+            lastModifiedBy: p.last_modified_by,
+            lastModifiedAt: p.last_modified_at,
           }));
 
-          const totalCount = count !== undefined && count !== null ? count : mapped.length;
-          return {
+          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
+          const result = {
             items: mapped,
             totalCount,
             page,
             pageSize,
             totalPages: Math.ceil(totalCount / pageSize) || 1,
           };
+          paginatedCache.set(cacheKey, { timestamp: Date.now(), result });
+          return result;
         }
       } catch (err) {
         console.warn('[packagingService] paginated query exception:', err);
@@ -224,7 +294,7 @@ export const packagingService = {
           const to = from + pageSize - 1;
           const { data, error } = await supabase
             .from('packaging_materials')
-            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, qc_parameters, reorder_point, last_modified_by, last_modified_at')
+            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions')
             .order('code', { ascending: true })
             .range(from, to);
 
@@ -241,17 +311,6 @@ export const packagingService = {
         }
 
         if (allData.length > 0) {
-          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
-            if (Array.isArray(val)) return val;
-            if (typeof val === 'string' && val.trim()) {
-              try {
-                const parsed = JSON.parse(val);
-                if (Array.isArray(parsed)) return parsed;
-              } catch {}
-            }
-            return fallback;
-          };
-
           const mapped: PackagingMaterial[] = allData.map((p: any) => ({
             id: p.id,
             code: p.code,
@@ -262,12 +321,12 @@ export const packagingService = {
             unitCapacityGrams: p.unit_capacity_grams ?? p.unitCapacityGrams,
             supplier: p.supplier || p.manufacturer || '',
             manufacturer: p.manufacturer || p.supplier || '',
-            storageLocation: p.storage_location || p.storageLocation || '',
+            storageLocation: p.storage_location || '',
             storageConditions: p.storage_conditions || p.storageConditions || '',
-            qcParameters: parseJsonArray(p.qc_parameters || p.qcParameters, []),
-            reorderPoint: p.reorder_point ?? p.reorderPoint ?? 100,
-            lastModifiedBy: p.last_modified_by || p.lastModifiedBy,
-            lastModifiedAt: p.last_modified_at || p.lastModifiedAt,
+            qcParameters: [],
+            reorderPoint: p.reorder_point ?? 100,
+            lastModifiedBy: p.last_modified_by,
+            lastModifiedAt: p.last_modified_at,
           }));
           inMemoryPackaging = mapped;
           lastFetchTime = Date.now();

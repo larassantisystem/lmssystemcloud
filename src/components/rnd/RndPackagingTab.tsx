@@ -235,8 +235,21 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
     setShowFormModal(true);
   };
 
-  // Open Edit Modal
-  const handleEditPMClick = (pm: PackagingMaterial) => {
+  // Open Detail Modal with On-Demand Fetch (Lazy Loading)
+  const handleOpenDetailPM = async (pm: PackagingMaterial) => {
+    setSelectedPMForDetails(pm);
+    try {
+      const full = await packagingService.getPackagingMaterialDetail(pm.id);
+      if (full) {
+        setSelectedPMForDetails(full);
+      }
+    } catch (e) {
+      console.warn('Gagal mengambil detail bahan kemas on-demand:', e);
+    }
+  };
+
+  // Open Edit Modal with On-Demand Fetch (Lazy Loading)
+  const handleEditPMClick = async (pm: PackagingMaterial) => {
     setEditingPM(pm);
     setPmCode(pm.code);
     setPmName(pm.name);
@@ -256,6 +269,21 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
     );
 
     setShowFormModal(true);
+
+    // Ambil detail lengkap (qc_parameters & reorder_point) secara on-demand
+    try {
+      const full = await packagingService.getPackagingMaterialDetail(pm.id);
+      if (full) {
+        setEditingPM(full);
+        if (full.reorderPoint !== undefined) setPmReorderPoint(full.reorderPoint);
+        const fullQc = parseQcParameters(full.qcParameters);
+        if (fullQc.length > 0) {
+          setPmQcParams([...fullQc]);
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail parameter kemasan saat edit:', e);
+    }
   };
 
   const handleAddQcParam = () => {
@@ -873,7 +901,7 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                       <div className="flex items-center justify-end gap-1">
                         {/* Tombol Lihat Detail */}
                         <button
-                          onClick={() => setSelectedPMForDetails(pm)}
+                          onClick={() => handleOpenDetailPM(pm)}
                           className="p-1 rounded bg-slate-50 border border-slate-200 hover:bg-purple-50 hover:border-purple-200 hover:text-purple-700 text-slate-600 transition-colors cursor-pointer"
                           title="Lihat Detail & QC"
                         >

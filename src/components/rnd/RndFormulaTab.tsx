@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { BulkFormulation, FormulationIngredient, Product, RawMaterial } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
@@ -6,6 +6,7 @@ import { canWriteModule } from '../../core/auth/permissionGuard';
 import { authService } from '../../core/auth/authService';
 import { formulaService } from '../../features/rnd/formula/formulaService';
 import { auditLogger } from '../../core/utils/auditLogger';
+import { Pagination } from '../../core/ui-components/Pagination';
 import {
   Plus,
   Trash2,
@@ -73,6 +74,46 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [productFilter, setProductFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+
+  // --- SERVER-SIDE / PAGINATED STATE (50 per page) ---
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [serverItems, setServerItems] = useState<BulkFormulation[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [isServerPaged, setIsServerPaged] = useState<boolean>(false);
+  const [isLoadingPage, setIsLoadingPage] = useState<boolean>(false);
+
+  const fetchServerPage = useCallback(async (page: number, size: number, search: string, pCode: string, stat: string) => {
+    setIsLoadingPage(true);
+    try {
+      const res = await formulaService.getFormulationsPaginated({
+        page,
+        pageSize: size,
+        search,
+        productCode: pCode,
+        status: stat,
+      });
+      setServerItems(res.items);
+      setTotalCount(res.totalCount);
+      setIsServerPaged(true);
+    } catch (e) {
+      console.warn('Error fetching paginated formulations:', e);
+    } finally {
+      setIsLoadingPage(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchServerPage(currentPage, itemsPerPage, searchQuery, productFilter, statusFilter);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [currentPage, itemsPerPage, searchQuery, productFilter, statusFilter, fetchServerPage]);
+
+  // Reset to page 1 on filter or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, productFilter, statusFilter]);
 
   // --- MODAL FORM STATE (GAMBAR 1) ---
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
@@ -159,32 +200,8 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
 
   // --- FILTERED FORMULATIONS FOR TABLE (GAMBAR 2) ---
   const filteredFormulations = useMemo(() => {
-    return formulations.filter((f) => {
-      // Search
-      const q = searchQuery.toLowerCase().trim();
-      const matchSearch =
-        !q ||
-        f.code.toLowerCase().includes(q) ||
-        f.productCode.toLowerCase().includes(q) ||
-        f.productName.toLowerCase().includes(q) ||
-        f.name.toLowerCase().includes(q) ||
-        f.ingredients.some((ing) => {
-          const rm = rawMaterialMap.get(ing.rawMaterialCode.toUpperCase());
-          return (
-            ing.rawMaterialCode.toLowerCase().includes(q) ||
-            (rm && (rm.name.toLowerCase().includes(q) || rm.chemicalName.toLowerCase().includes(q)))
-          );
-        });
-
-      // Product filter
-      const matchProduct = productFilter === 'all' || f.productCode === productFilter;
-
-      // Status filter
-      const matchStatus = statusFilter === 'all' || f.status === statusFilter;
-
-      return matchSearch && matchProduct && matchStatus;
-    });
-  }, [formulations, searchQuery, productFilter, statusFilter, rawMaterialMap]);
+    return serverItems;
+  }, [serverItems]);
 
   // Status stats
   const statusStats = useMemo(() => {
@@ -199,6 +216,39 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
     });
     return { active, draft, archived, total: formulations.length };
   }, [formulations]);
+
+  // Current items: server-paged if available, otherwise sliced client-side
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentItems = isServerPaged ? serverItems : filteredFormulations.slice(indexOfFirstItem, indexOfLastItem);
+  const displayTotalCount = isServerPaged ? totalCount : filteredFormulations.length;
+
+  // On-demand lazy load formulation details for ingredient viewing popup
+  const handleOpenIngredientsDetail = async (formula: BulkFormulation) => {
+    setViewingFormulaIngredients(formula);
+    try {
+      const full = await formulaService.getFormulationDetail(formula.id);
+      if (full) {
+        setViewingFormulaIngredients(full);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat komposisi bahan baku on-demand:', e);
+    }
+  };
+
+  // On-demand lazy load for CPB document viewing/printing
+  const handleOpenCpbDocument = async (f: BulkFormulation) => {
+    setActiveModalFormulation(f);
+    setShowCpbModal(true);
+    try {
+      const full = await formulaService.getFormulationDetail(f.id);
+      if (full) {
+        setActiveModalFormulation(full);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail CPB on-demand:', e);
+    }
+  };
 
   // Current Total Percentage in Form Modal
   const totalPercentage = useMemo(() => {
@@ -429,8 +479,8 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
     setIsFormModalOpen(true);
   };
 
-  // --- HANDLER: OPEN EDIT MODAL ---
-  const handleOpenEditForm = (formula: BulkFormulation) => {
+  // --- HANDLER: OPEN EDIT MODAL (LAZY LOADING DETAIL) ---
+  const handleOpenEditForm = async (formula: BulkFormulation) => {
     setEditingFormulaId(formula.id);
     setFormModalTab('COMPOSITION');
     setFormProductCode(formula.productCode || '');
@@ -456,7 +506,7 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
     setFormMachine1(m1);
     setFormMachine2(m2);
 
-    const mappedIngredients = formula.ingredients.map((ing) => ({
+    const mappedIngredients = (formula.ingredients || []).map((ing) => ({
       ...ing,
       qtyBasisKg: Number((((Number(ing.percentage) || 0) * (formula.bulkQuantityKg || 100)) / 100).toFixed(4)),
     }));
@@ -469,10 +519,46 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
     }
 
     setIsFormModalOpen(true);
+
+    // Ambil detail lengkap secara on-demand (ingredients, mixing_instructions, process steps)
+    try {
+      const full = await formulaService.getFormulationDetail(formula.id);
+      if (full) {
+        setFormPurposeDescription(full.purposeDescription || 'Formula Master Ruahan standar CPKB basis 100 kg.');
+        setFormMixingInstructions(full.mixingInstructions || '');
+
+        let fullM1 = 'PRD-057 Wadah Stainless Steel 300 kg (5)';
+        let fullM2 = 'PRD-049 Homogenizer 70 kg';
+        if (full.technicalNotes) {
+          const parts = full.technicalNotes.split('|');
+          parts.forEach((p) => {
+            if (p.includes('Mesin Utama:')) fullM1 = p.replace('Mesin Utama:', '').trim();
+            if (p.includes('Homogenizer:')) fullM2 = p.replace('Homogenizer:', '').trim();
+          });
+        }
+        setFormMachine1(fullM1);
+        setFormMachine2(fullM2);
+
+        if (full.ingredients && full.ingredients.length > 0) {
+          const fullIngs = full.ingredients.map((ing) => ({
+            ...ing,
+            qtyBasisKg: Number((((Number(ing.percentage) || 0) * (full.bulkQuantityKg || 100)) / 100).toFixed(4)),
+          }));
+          setFormIngredients(fullIngs);
+          if (full.dynamicProcessSteps && Array.isArray(full.dynamicProcessSteps) && full.dynamicProcessSteps.length > 0) {
+            setFormProcessSteps(full.dynamicProcessSteps);
+          } else {
+            setFormProcessSteps(generateDefaultProcessSteps(fullIngs));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail formula saat edit on-demand:', e);
+    }
   };
 
-  // --- HANDLER: DUPLICATE / BUAT VERSI BARU DARI FORMULA EKSISTING ---
-  const handleOpenDuplicateForm = (formula: BulkFormulation) => {
+  // --- HANDLER: DUPLICATE / BUAT VERSI BARU DARI FORMULA EKSISTING (LAZY LOADING DETAIL) ---
+  const handleOpenDuplicateForm = async (formula: BulkFormulation) => {
     // Naikkan versi otomatis
     const nextVer = formulaService.calculateNextVersion(formulations, formula.productCode);
     const newBomCode = `BOM-${formula.productCode.toUpperCase()}-${nextVer.toUpperCase()}`;
@@ -501,7 +587,7 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
     setFormMachine1(m1);
     setFormMachine2(m2);
 
-    const mappedIngredients = formula.ingredients.map((ing) => ({
+    const mappedIngredients = (formula.ingredients || []).map((ing) => ({
       ...ing,
       qtyBasisKg: Number((((Number(ing.percentage) || 0) * (formula.bulkQuantityKg || 100)) / 100).toFixed(4)),
     }));
@@ -515,6 +601,42 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
 
     setIsFormModalOpen(true);
     showToast(`Menduplikasi formula untuk versi baru (${nextVer}). Silakan sesuaikan komposisi dan langkah proses.`, 'success');
+
+    // Ambil detail lengkap formula sumber secara on-demand
+    try {
+      const full = await formulaService.getFormulationDetail(formula.id);
+      if (full) {
+        setFormPurposeDescription(`Revisi dari ${full.code} (${full.version}). ${full.purposeDescription || ''}`);
+        setFormMixingInstructions(full.mixingInstructions || '');
+
+        let fullM1 = 'PRD-057 Wadah Stainless Steel 300 kg (5)';
+        let fullM2 = 'PRD-049 Homogenizer 70 kg';
+        if (full.technicalNotes) {
+          const parts = full.technicalNotes.split('|');
+          parts.forEach((p) => {
+            if (p.includes('Mesin Utama:')) fullM1 = p.replace('Mesin Utama:', '').trim();
+            if (p.includes('Homogenizer:')) fullM2 = p.replace('Homogenizer:', '').trim();
+          });
+        }
+        setFormMachine1(fullM1);
+        setFormMachine2(fullM2);
+
+        if (full.ingredients && full.ingredients.length > 0) {
+          const fullIngs = full.ingredients.map((ing) => ({
+            ...ing,
+            qtyBasisKg: Number((((Number(ing.percentage) || 0) * (full.bulkQuantityKg || 100)) / 100).toFixed(4)),
+          }));
+          setFormIngredients(fullIngs);
+          if (full.dynamicProcessSteps && Array.isArray(full.dynamicProcessSteps) && full.dynamicProcessSteps.length > 0) {
+            setFormProcessSteps(full.dynamicProcessSteps);
+          } else {
+            setFormProcessSteps(generateDefaultProcessSteps(fullIngs));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail formula saat duplikasi on-demand:', e);
+    }
   };
 
   // --- HANDLER: PRODUK JADI BERUBAH DI DALAM MODAL FORM ---
@@ -1725,7 +1847,7 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                {filteredFormulations.map((f, idx) => {
+                {currentItems.map((f, idx) => {
                   const isMatchActive = f.status === 'ACTIVE';
                   const isMatchDraft = f.status === 'DRAFT';
 
@@ -1736,7 +1858,7 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
                     >
                       {/* 1. No */}
                       <td className="py-1.5 px-3 text-center font-mono font-bold text-slate-400 text-[11px]">
-                        {idx + 1}
+                        {indexOfFirstItem + idx + 1}
                       </td>
 
                       {/* 2. Nomor BOM */}
@@ -1752,7 +1874,7 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
                       {/* 3. Produk Jadi Target */}
                       <td className="py-1.5 px-3">
                         <div
-                          onClick={() => setViewingFormulaIngredients(f)}
+                          onClick={() => handleOpenIngredientsDetail(f)}
                           className="cursor-pointer group/target"
                           title="Klik untuk melihat daftar bahan baku & komposisi formula matrix"
                         >
@@ -1795,9 +1917,14 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
 
                       {/* 6. Jumlah Bahan */}
                       <td className="py-1.5 px-3 text-center">
-                        <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-[10px]">
-                          {f.ingredients.length} bahan
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenIngredientsDetail(f)}
+                          className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-800 font-semibold text-[10px] cursor-pointer transition-colors"
+                          title="Klik untuk memuat & melihat detail bahan baku"
+                        >
+                          {f.ingredients && f.ingredients.length > 0 ? `${f.ingredients.length} bahan` : 'Lihat Bahan'}
+                        </button>
                       </td>
 
                       {/* 7. Status */}
@@ -1824,9 +1951,9 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
                           {/* Preview Bahan */}
                           <button
                             type="button"
-                            onClick={() => setViewingFormulaIngredients(f)}
+                            onClick={() => handleOpenIngredientsDetail(f)}
                             className="p-1 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-md transition-colors cursor-pointer"
-                            title="Lihat Komposisi Formula Matrix"
+                            title="Lihat Komposisi Formula Matrix (On-Demand)"
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>
@@ -1849,11 +1976,31 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
                               type="button"
                               onClick={() => handleOpenEditForm(f)}
                               className="p-1 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-md transition-colors cursor-pointer"
-                              title="Edit Master BOM"
+                              title="Edit Master BOM (On-Demand Fetch)"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                           )}
+
+                          {/* Cetak Catatan Pengolahan Batch (CPB) */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenCpbDocument(f)}
+                            className="p-1 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                            title="Cetak Catatan Pengolahan Batch (CPB Standar BPOM)"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Cetak Catatan Pengolahan Batch (CPB) */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenCpbDocument(f)}
+                            className="p-1 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                            title="Cetak Catatan Pengolahan Batch (CPB Standar BPOM)"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
 
                           {/* Hapus Formula (dengan password konfirmasi) */}
                           {canWrite && (
@@ -1879,8 +2026,8 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
         {/* Footer Statistics (Compact) */}
         <div className="bg-slate-50/70 border-t border-slate-100 px-4 py-2 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-1.5">
           <div>
-            Menampilkan <strong className="text-slate-800">{filteredFormulations.length}</strong> dari{' '}
-            <strong className="text-slate-800">{formulations.length}</strong> Master BOM
+            Menampilkan <strong className="text-slate-800">{currentItems.length}</strong> dari{' '}
+            <strong className="text-slate-800">{displayTotalCount}</strong> Master BOM
           </div>
           <div className="flex items-center gap-3 font-semibold text-[11px]">
             <span className="flex items-center gap-1 text-emerald-700">
@@ -1896,6 +2043,20 @@ export const RndFormulaTab: React.FC<RndFormulaTabProps> = ({
               ARCHIVED: {statusStats.archived}
             </span>
           </div>
+        </div>
+
+        {/* Pagination Controls */}
+        <div className="px-3 pb-1.5 pt-1 border-t border-slate-100">
+          <Pagination
+            currentPage={currentPage}
+            totalItems={displayTotalCount}
+            itemsPerPage={itemsPerPage}
+            onPageChange={setCurrentPage}
+            onItemsPerPageChange={(items) => {
+              setItemsPerPage(items);
+              setCurrentPage(1);
+            }}
+          />
         </div>
       </div>
 

@@ -54,7 +54,11 @@ const defaultFormulations: BulkFormulation[] = [
 
 let inMemoryFormulations: BulkFormulation[] = [...defaultFormulations];
 let lastFormulationsFetchTime = 0;
-const FORMULATIONS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit cache di RAM untuk efisiensi egress Supabase
+let cachedFormulaCount: number | null = null;
+let lastCountFetchTime = 0;
+const FORMULATIONS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM untuk efisiensi egress Supabase
+const paginatedFormulaCache = new Map<string, { timestamp: number; result: any }>();
+const formulaDetailCache = new Map<string, { timestamp: number; data: BulkFormulation }>();
 
 /**
  * Lossless packing of CPKB Dynamic Process Steps and Technical Notes into mixing_instructions
@@ -124,6 +128,203 @@ export const formulaService = {
 
   invalidateCache: () => {
     lastFormulationsFetchTime = 0;
+    cachedFormulaCount = null;
+    paginatedFormulaCache.clear();
+    formulaDetailCache.clear();
+  },
+
+  /**
+   * Mengambil jumlah total formulasi secara efisien tanpa egress baris data (head: true)
+   */
+  getFormulationsCount: async (): Promise<number> => {
+    if (cachedFormulaCount !== null && (Date.now() - lastCountFetchTime < FORMULATIONS_CACHE_TTL_MS)) {
+      return cachedFormulaCount;
+    }
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { count, error } = await supabase
+          .from('bulk_formulations')
+          .select('id', { count: 'exact', head: true });
+        if (!error && typeof count === 'number') {
+          cachedFormulaCount = count;
+          lastCountFetchTime = Date.now();
+          return count;
+        }
+      } catch (err) {
+        console.warn('[formulaService] getFormulationsCount error:', err);
+      }
+    }
+    return cachedFormulaCount ?? inMemoryFormulations.length;
+  },
+
+  /**
+   * Mengambil detail lengkap SATU formulasi (lazy loading on-demand)
+   * Hanya dipanggil saat user menekan tombol Detail, Edit, Cetak CPB, atau Duplikasi
+   */
+  getFormulationDetail: async (id: string): Promise<BulkFormulation | null> => {
+    if (!id) return null;
+    const cached = formulaDetailCache.get(id);
+    if (cached && (Date.now() - cached.timestamp < FORMULATIONS_CACHE_TTL_MS)) {
+      return cached.data;
+    }
+
+    if (!isSupabaseConfigured || !supabase) {
+      return inMemoryFormulations.find(f => f.id === id || f.code === id) || null;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('bulk_formulations')
+        .select('*')
+        .or(`id.eq.${id},code.eq.${id}`)
+        .maybeSingle();
+
+      if (error || !data) {
+        console.warn('[formulaService] Error fetching formulation detail:', error?.message);
+        return inMemoryFormulations.find(f => f.id === id || f.code === id) || null;
+      }
+
+      const unpacked = unpackFormulationMeta(data.mixing_instructions);
+      const fullItem: BulkFormulation = {
+        id: data.id,
+        code: data.code,
+        name: data.name,
+        productId: data.product_id || '',
+        productCode: data.product_code || '',
+        productName: data.product_name || data.name || '',
+        version: data.version || 'v1.0',
+        status: data.status || 'ACTIVE',
+        bulkQuantityKg: Number(data.bulk_quantity_kg) || 100,
+        purposeDescription: data.purpose_description || '',
+        ingredients: Array.isArray(data.ingredients) ? data.ingredients : [],
+        mixingInstructions: unpacked.userInstructions || data.mixing_instructions || '',
+        dynamicProcessSteps: data.dynamic_process_steps || unpacked.dynamicProcessSteps || undefined,
+        technicalNotes: data.technical_notes || unpacked.technicalNotes || '',
+        createdBy: data.created_by || '',
+        createdAt: data.created_at || new Date().toISOString(),
+        updatedAt: data.updated_at || new Date().toISOString(),
+      };
+
+      formulaDetailCache.set(id, { timestamp: Date.now(), data: fullItem });
+      formulaDetailCache.set(fullItem.id, { timestamp: Date.now(), data: fullItem });
+      formulaDetailCache.set(fullItem.code, { timestamp: Date.now(), data: fullItem });
+      return fullItem;
+    } catch (err) {
+      console.warn('[formulaService] Exception fetching formulation detail:', err);
+      return inMemoryFormulations.find(f => f.id === id || f.code === id) || null;
+    }
+  },
+
+  /**
+   * Paginasi tetap 50 item per halaman dengan kueri ultra-ringan (tanpa blob instruksi & langkah teknis besar)
+   */
+  getFormulationsPaginated: async (params: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    productCode?: string;
+    status?: string;
+  }): Promise<{ items: BulkFormulation[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = Math.max(1, params.pageSize || 50);
+    const from = (page - 1) * pageSize;
+    const queryTo = from + pageSize; // Ambil pageSize + 1 untuk deteksi tombol Selanjutnya (Next) tanpa full scan
+
+    const cacheKey = `${page}-${pageSize}-${params.search || ''}-${params.productCode || 'all'}-${params.status || 'all'}`;
+    const cached = paginatedFormulaCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < FORMULATIONS_CACHE_TTL_MS)) {
+      return cached.result;
+    }
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        let query = supabase
+          .from('bulk_formulations')
+          .select('id, code, name, product_id, product_code, product_name, version, status, bulk_quantity_kg, purpose_description, created_by, created_at, updated_at');
+
+        if (params.search && params.search.trim()) {
+          const s = params.search.trim();
+          query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%,product_code.ilike.%${s}%,product_name.ilike.%${s}%`);
+        }
+
+        if (params.productCode && params.productCode !== 'all') {
+          query = query.eq('product_code', params.productCode);
+        }
+
+        if (params.status && params.status !== 'all') {
+          query = query.eq('status', params.status);
+        }
+
+        query = query.order('created_at', { ascending: false }).range(from, queryTo);
+
+        const { data, error } = await query;
+
+        if (!error && data) {
+          const hasMore = data.length > pageSize;
+          const rawItems = hasMore ? data.slice(0, pageSize) : data;
+          const mapped: BulkFormulation[] = rawItems.map((row: any) => ({
+            id: row.id,
+            code: row.code,
+            name: row.name,
+            productId: row.product_id || '',
+            productCode: row.product_code || '',
+            productName: row.product_name || row.name || '',
+            version: row.version || 'v1.0',
+            status: row.status || 'ACTIVE',
+            bulkQuantityKg: Number(row.bulk_quantity_kg) || 100,
+            purposeDescription: row.purpose_description || '',
+            ingredients: [], // Dikosongkan agar hemat bandwidth, diambil on-demand saat klik detail/edit
+            mixingInstructions: '',
+            dynamicProcessSteps: undefined,
+            technicalNotes: '',
+            createdBy: row.created_by || '',
+            createdAt: row.created_at || new Date().toISOString(),
+            updatedAt: row.updated_at || new Date().toISOString(),
+          }));
+
+          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
+          const result = {
+            items: mapped,
+            totalCount,
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalCount / pageSize) || 1,
+          };
+          paginatedFormulaCache.set(cacheKey, { timestamp: Date.now(), result });
+          return result;
+        }
+      } catch (err) {
+        console.warn('[formulaService] getFormulationsPaginated exception:', err);
+      }
+    }
+
+    // Fallback in-memory
+    const to = from + pageSize - 1;
+    let filtered = inMemoryFormulations;
+    if (params.search && params.search.trim()) {
+      const s = params.search.trim().toLowerCase();
+      filtered = filtered.filter((f) =>
+        f.code.toLowerCase().includes(s) ||
+        f.productCode.toLowerCase().includes(s) ||
+        f.productName.toLowerCase().includes(s) ||
+        f.name.toLowerCase().includes(s)
+      );
+    }
+    if (params.productCode && params.productCode !== 'all') {
+      filtered = filtered.filter((f) => f.productCode === params.productCode);
+    }
+    if (params.status && params.status !== 'all') {
+      filtered = filtered.filter((f) => f.status === params.status);
+    }
+
+    const items = filtered.slice(from, to + 1);
+    return {
+      items,
+      totalCount: filtered.length,
+      page,
+      pageSize,
+      totalPages: Math.ceil(filtered.length / pageSize) || 1,
+    };
   },
 
   /**
@@ -197,6 +398,7 @@ export const formulaService = {
    * Menyimpan atau memperbarui satu formulasi bulk ke Supabase
    */
   saveSingleFormulation: async (formula: BulkFormulation): Promise<{ success: boolean; error?: string }> => {
+    formulaService.invalidateCache();
     const packedInstructions = packFormulationMeta(
       formula.mixingInstructions,
       formula.dynamicProcessSteps,
@@ -266,6 +468,7 @@ export const formulaService = {
    * Menyimpan kumpulan formulasi bulk ke Supabase secara batch
    */
   saveBulkFormulations: async (formulas: BulkFormulation[]): Promise<{ success: boolean; error?: string; savedCount?: number }> => {
+    formulaService.invalidateCache();
     if (!formulas || formulas.length === 0) return { success: true, savedCount: 0 };
 
     const payloads = formulas.map((formula) => {
@@ -338,6 +541,7 @@ export const formulaService = {
    * Menghapus formulasi dari database Supabase
    */
   deleteFormulation: async (id: string, code?: string): Promise<{ success: boolean; error?: string }> => {
+    formulaService.invalidateCache();
     if (isSupabaseConfigured && supabase) {
       try {
         await supabase.from('bulk_formulations').delete().eq('id', id);

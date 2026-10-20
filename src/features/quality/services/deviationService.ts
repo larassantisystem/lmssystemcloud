@@ -36,29 +36,59 @@ export const deviationService = {
 
       if (!data) return [];
 
-      const mapped: DeviationReport[] = data.map((d: any) => ({
-        id: d.id,
-        deviationNumber: d.deviation_number,
-        title: d.title,
-        category: d.category || 'PRODUCTION',
-        severity: d.severity || 'MINOR',
-        department: d.department || 'production',
-        targetDepartments: d.target_departments || ['production', 'quality'],
-        batchNumber: d.batch_number,
-        materialCode: d.material_code,
-        materialName: d.material_name,
-        description: d.description,
-        initiatorName: d.initiator_name || 'User',
-        initiatorNik: d.initiator_nik || 'USER',
-        status: d.status || 'DRAFT',
-        impacts: d.impacts || [],
-        rootCause: d.root_cause,
-        capaActions: d.capa_actions || [],
-        createdAt: d.created_at,
-        updatedAt: d.updated_at,
-        closedAt: d.closed_at,
-        closedBy: d.closed_by,
-      }));
+      const mapped: DeviationReport[] = data.map((d: any) => {
+        let parsedImpacts: any[] = [];
+        try {
+          parsedImpacts = typeof d.impacts === 'string' ? JSON.parse(d.impacts) : (Array.isArray(d.impacts) ? d.impacts : []);
+        } catch {
+          parsedImpacts = [];
+        }
+
+        let parsedCapa: any[] = [];
+        try {
+          parsedCapa = typeof d.capa_actions === 'string' ? JSON.parse(d.capa_actions) : (Array.isArray(d.capa_actions) ? d.capa_actions : []);
+        } catch {
+          parsedCapa = [];
+        }
+
+        let parsedTargets: string[] = ['production', 'quality'];
+        try {
+          parsedTargets = typeof d.target_departments === 'string' ? JSON.parse(d.target_departments) : (Array.isArray(d.target_departments) ? d.target_departments : ['production', 'quality']);
+        } catch {
+          parsedTargets = ['production', 'quality'];
+        }
+
+        let parsedRootCause: any = null;
+        try {
+          parsedRootCause = typeof d.root_cause === 'string' ? JSON.parse(d.root_cause) : d.root_cause;
+        } catch {
+          parsedRootCause = null;
+        }
+
+        return {
+          id: d.id,
+          deviationNumber: d.deviation_number,
+          title: d.title,
+          category: d.category || 'PRODUCTION',
+          severity: d.severity || 'MINOR',
+          department: d.department || 'production',
+          targetDepartments: parsedTargets,
+          batchNumber: d.batch_number,
+          materialCode: d.material_code,
+          materialName: d.material_name,
+          description: d.description,
+          initiatorName: d.initiator_name || 'User',
+          initiatorNik: d.initiator_nik || 'USER',
+          status: d.status || 'DRAFT',
+          impacts: parsedImpacts,
+          rootCause: parsedRootCause,
+          capaActions: parsedCapa,
+          createdAt: d.created_at,
+          updatedAt: d.updated_at,
+          closedAt: d.closed_at,
+          closedBy: d.closed_by,
+        };
+      });
 
       inMemoryDeviations = mapped;
       lastDeviationFetchTime = Date.now();
@@ -74,9 +104,24 @@ export const deviationService = {
       throw new Error('Supabase belum dikonfigurasi untuk menyimpan deviasi secara permanen.');
     }
 
-    const { count: exactCount } = await supabase.from('deviations').select('id', { count: 'exact', head: true });
-    const count = (exactCount || 0) + 1;
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '').slice(2);
+    let count = 1;
+    try {
+      const { data: latestDev } = await supabase
+        .from('deviations')
+        .select('deviation_number')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (latestDev && latestDev.length > 0 && latestDev[0].deviation_number) {
+        const match = latestDev[0].deviation_number.match(/-(\d+)$/);
+        if (match) {
+          count = parseInt(match[1], 10) + 1;
+        }
+      }
+    } catch {
+      count = Math.floor(Math.random() * 900) + 100;
+    }
     const deviationNumber = `DEV-${dateStr}-${String(count).padStart(3, '0')}`;
 
     const newReport: DeviationReport = {
@@ -109,6 +154,7 @@ export const deviationService = {
       capa_actions: newReport.capaActions,
       created_at: newReport.createdAt,
       updated_at: newReport.updatedAt,
+      date: newReport.createdAt.slice(0, 10),
     };
 
     const { error } = await supabase.from('deviations').insert([payload]);

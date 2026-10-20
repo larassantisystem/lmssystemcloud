@@ -29,7 +29,11 @@ const defaultSeedProducts: Product[] = [];
 
 let inMemoryProducts: Product[] = [];
 let lastProductsFetchTime = 0;
-const PRODUCTS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit cache di RAM untuk efisiensi egress Supabase
+let cachedTotalProducts: { totalProducts: number; totalVariants: number } | null = null;
+let lastCountFetchTime = 0;
+const PRODUCTS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM untuk efisiensi egress Supabase
+const paginatedCache = new Map<string, { timestamp: number; result: any }>();
+const productDetailCache = new Map<string, { timestamp: number; data: Product }>();
 let tablesInitializedInSupabase: boolean | null = null;
 
 const isTableMissingError = (err: any): boolean => {
@@ -160,10 +164,16 @@ export const productService = {
 
   invalidateCache: () => {
     lastProductsFetchTime = 0;
+    cachedTotalProducts = null;
+    paginatedCache.clear();
+    productDetailCache.clear();
   },
 
 
   getProductsCount: async (): Promise<{ totalProducts: number; totalVariants: number }> => {
+    if (cachedTotalProducts !== null && (Date.now() - lastCountFetchTime < PRODUCTS_CACHE_TTL_MS)) {
+      return cachedTotalProducts;
+    }
     if (isSupabaseConfigured && supabase) {
       try {
         const { count: prodCount } = await supabase
@@ -172,16 +182,19 @@ export const productService = {
         const { count: varCount } = await supabase
           .from('product_variants')
           .select('id', { count: 'exact', head: true });
-        return {
+        const res = {
           totalProducts: prodCount || 0,
           totalVariants: varCount || 0,
         };
+        cachedTotalProducts = res;
+        lastCountFetchTime = Date.now();
+        return res;
       } catch (err) {
         console.warn('[productService] getProductsCount error:', err);
       }
     }
     const totalVariants = inMemoryProducts.reduce((sum, p) => sum + (p.variants?.length || 0), 0);
-    return {
+    return cachedTotalProducts ?? {
       totalProducts: inMemoryProducts.length,
       totalVariants,
     };
@@ -197,7 +210,13 @@ export const productService = {
     const page = Math.max(1, params.page || 1);
     const pageSize = Math.max(1, params.pageSize || 50);
     const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
+    const queryTo = from + pageSize; // fetch pageSize + 1 items
+
+    const cacheKey = `${page}-${pageSize}-${params.search || ''}-${params.category || 'all'}-${params.expFilter || 'all'}`;
+    const cached = paginatedCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < PRODUCTS_CACHE_TTL_MS)) {
+      return cached.result;
+    }
 
     const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
       if (Array.isArray(val)) return val;
@@ -214,7 +233,7 @@ export const productService = {
       try {
         let query = supabase
           .from('products')
-          .select('id, product_code, name, brand, category, description, unit, storage_conditions, bpom_notification_number, exp_notification_date, qc_parameters, finished_parameters, created_at', { count: 'exact' });
+          .select('id, product_code, name, brand, category, description, unit, storage_conditions, bpom_notification_number, exp_notification_date, created_at');
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -232,20 +251,22 @@ export const productService = {
           query = query.lte('exp_notification_date', limitStr);
         }
 
-        query = query.order('product_code', { ascending: true }).range(from, to);
+        query = query.order('product_code', { ascending: true }).range(from, queryTo);
 
-        const { data: pageProducts, count, error } = await query;
+        const { data: pageProducts, error } = await query;
 
         if (!error && pageProducts) {
-          const productIds = pageProducts.map((p: any) => p.id);
+          const hasMore = pageProducts.length > pageSize;
+          const rawItems = hasMore ? pageProducts.slice(0, pageSize) : pageProducts;
+          const productIds = rawItems.map((p: any) => p.id);
           let variantsByProductId: Record<string, any[]> = {};
 
           if (productIds.length > 0) {
             try {
-              // Optimized: ONLY query variants belonging to the products on this specific page
+              // Optimized: ONLY query lightweight variant fields for products on this page
               const { data: varData, error: varErr } = await supabase
                 .from('product_variants')
-                .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, packaging_bom, bpom_number, barcode, description, created_at')
+                .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, bpom_number, barcode, created_at')
                 .in('product_id', productIds);
 
               if (!varErr && varData) {
@@ -260,7 +281,7 @@ export const productService = {
             }
           }
 
-          const mapped: Product[] = pageProducts.map((p: any) => {
+          const mapped: Product[] = rawItems.map((p: any) => {
             const pVariants = variantsByProductId[p.id] || [];
             return {
               id: p.id,
@@ -275,8 +296,8 @@ export const productService = {
               bpomNotificationNumber: p.bpom_notification_number || '',
               bpomNotificationExt: p.exp_notification_date || '',
               expNotificationDate: p.exp_notification_date || '',
-              qcParameters: parseJsonArray(p.qc_parameters, []),
-              finishedQcParameters: parseJsonArray(p.finished_parameters || p.finished_qc_parameters, []),
+              qcParameters: [],
+              finishedQcParameters: [],
               createdAt: p.created_at,
               variants: pVariants.map((v: any) => ({
                 id: v.id,
@@ -287,7 +308,7 @@ export const productService = {
                 status: v.status || 'active',
                 netVolumeGrams: Number(v.net_volume_grams) || 0,
                 bulkFormulaCode: v.bulk_formula_code || '',
-                packagingBom: parseJsonArray(v.packaging_bom, []),
+                packagingBom: [],
                 bpomNumber: v.bpom_number || '',
                 barcode: v.barcode || '',
                 description: v.description || '',
@@ -296,14 +317,16 @@ export const productService = {
             };
           });
 
-          const totalCount = count !== undefined && count !== null ? count : mapped.length;
-          return {
+          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
+          const result = {
             items: mapped,
             totalCount,
             page,
             pageSize,
             totalPages: Math.ceil(totalCount / pageSize) || 1,
           };
+          paginatedCache.set(cacheKey, { timestamp: Date.now(), result });
+          return result;
         }
       } catch (err) {
         console.warn('[productService] getProductsPaginated exception:', err);
@@ -311,6 +334,7 @@ export const productService = {
     }
 
     // Fallback in-memory
+    const to = from + pageSize - 1;
     let filtered = inMemoryProducts;
     if (params.search && params.search.trim()) {
       const s = params.search.trim().toLowerCase();
@@ -476,6 +500,12 @@ export const productService = {
    * Mengambil spesifikasi parameter lengkap dari sebuah produk secara on-demand (lazy load)
    */
   getProductWithParams: async (productId: string): Promise<Product | null> => {
+    if (!productId) return null;
+    const cached = productDetailCache.get(productId);
+    if (cached && (Date.now() - cached.timestamp < PRODUCTS_CACHE_TTL_MS)) {
+      return cached.data;
+    }
+
     if (!isSupabaseConfigured || !supabase) {
       const prod = inMemoryProducts.find(p => p.id === productId);
       return prod || null;
@@ -484,38 +514,125 @@ export const productService = {
     try {
       const { data, error } = await supabase
         .from('products')
-        .select('id, qc_parameters, finished_parameters')
+        .select('*')
         .eq('id', productId)
         .single();
 
-      if (error) {
-        console.warn(`[productService] Gagal mengambil parameter on-demand untuk ${productId}:`, error.message);
-        return null;
+      if (error || !data) {
+        console.warn(`[productService] Gagal mengambil detail produk on-demand untuk ${productId}:`, error?.message);
+        return inMemoryProducts.find(p => p.id === productId) || null;
       }
 
-      if (data) {
-        const cachedProd = inMemoryProducts.find(p => p.id === productId);
-        if (cachedProd) {
-          cachedProd.qcParameters = data.qc_parameters || [];
-          cachedProd.finishedQcParameters = data.finished_parameters || [];
-        }
-        return {
-          id: data.id,
-          code: cachedProd?.code || '',
-          name: cachedProd?.name || '',
-          brand: cachedProd?.brand || '',
-          category: cachedProd?.category || '',
-          description: cachedProd?.description || '',
-          qcParameters: data.qc_parameters || [],
-          finishedQcParameters: data.finished_parameters || [],
-          variants: cachedProd?.variants || []
-        };
+      // Ambil variants lengkap dengan packaging_bom
+      let loadedVariants: any[] = [];
+      try {
+        const { data: vData } = await supabase
+          .from('product_variants')
+          .select('*')
+          .eq('product_id', productId);
+        if (vData) loadedVariants = vData;
+      } catch (vErr) {
+        console.warn('[productService] error fetching variants on-demand:', vErr);
       }
-      return null;
+
+      const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+        if (Array.isArray(val)) return val;
+        if (typeof val === 'string' && val.trim()) {
+          try {
+            const parsed = JSON.parse(val);
+            if (Array.isArray(parsed)) return parsed;
+          } catch {}
+        }
+        return fallback;
+      };
+
+      const fullProduct: Product = {
+        id: data.id,
+        code: data.product_code || data.code || '',
+        productCode: data.product_code || data.code || '',
+        name: data.name || '',
+        brand: data.brand || '',
+        category: data.category || '',
+        description: data.description || '',
+        unit: data.unit || 'pcs (Pieces)',
+        storageConditions: data.storage_conditions || '',
+        bpomNotificationNumber: data.bpom_notification_number || '',
+        bpomNotificationExt: data.exp_notification_date || '',
+        expNotificationDate: data.exp_notification_date || '',
+        qcParameters: parseJsonArray(data.qc_parameters, []),
+        finishedQcParameters: parseJsonArray(data.finished_parameters || data.finished_qc_parameters, []),
+        createdAt: data.created_at,
+        variants: loadedVariants.map((v: any) => ({
+          id: v.id,
+          productId: v.product_id || data.id,
+          variantCode: v.sku || v.variant_code || '',
+          sku: v.sku || v.variant_code || '',
+          variantName: v.variant_name || '',
+          status: v.status || 'active',
+          netVolumeGrams: Number(v.net_volume_grams) || 0,
+          bulkFormulaCode: v.bulk_formula_code || '',
+          packagingBom: parseJsonArray(v.packaging_bom, []),
+          bpomNumber: v.bpom_number || '',
+          barcode: v.barcode || '',
+          description: v.description || '',
+          createdAt: v.created_at,
+        })),
+      };
+
+      productDetailCache.set(productId, { timestamp: Date.now(), data: fullProduct });
+      return fullProduct;
     } catch (err) {
       console.warn(`[productService] Exception saat mengambil parameter on-demand:`, err);
-      return null;
+      return inMemoryProducts.find(p => p.id === productId) || null;
     }
+  },
+
+  /**
+   * Mengambil detail lengkap satu varian (termasuk packaging_bom) secara on-demand saat edit varian
+   */
+  getVariantDetail: async (variantId: string): Promise<ProductVariant | null> => {
+    if (!variantId) return null;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('product_variants')
+          .select('*')
+          .eq('id', variantId)
+          .maybeSingle();
+
+        if (!error && data) {
+          const parseJsonArray = <T = any>(val: any, fallback: T[] = []): T[] => {
+            if (Array.isArray(val)) return val;
+            if (typeof val === 'string' && val.trim()) {
+              try {
+                const parsed = JSON.parse(val);
+                if (Array.isArray(parsed)) return parsed;
+              } catch {}
+            }
+            return fallback;
+          };
+
+          return {
+            id: data.id,
+            productId: data.product_id,
+            variantCode: data.sku || data.variant_code || '',
+            sku: data.sku || data.variant_code || '',
+            variantName: data.variant_name || '',
+            status: data.status || 'active',
+            netVolumeGrams: Number(data.net_volume_grams) || 0,
+            bulkFormulaCode: data.bulk_formula_code || '',
+            packagingBom: parseJsonArray(data.packaging_bom, []),
+            bpomNumber: data.bpom_number || '',
+            barcode: data.barcode || '',
+            description: data.description || '',
+            createdAt: data.created_at,
+          };
+        }
+      } catch (err) {
+        console.warn('[productService] getVariantDetail exception:', err);
+      }
+    }
+    return null;
   },
 
   /**

@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to fix raw material QC parameter lookup by increasing fetch limit to 2000 and adding cache invalidation in materialService.ts.",
-  "updatedAt": "2026-10-16T01:21:19.947271876Z",
+  "summary": "Rencana penyesuaian Modul Deviasi sesuai 12 tahapan SOP resmi perusahaan (dari Pelaporan hingga Kesimpulan dan Penutupan).",
+  "updatedAt": "2026-10-19T06:45:18.355615380Z",
   "requestFeedback": true,
   "userFacing": true
 }

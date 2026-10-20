@@ -150,8 +150,8 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
 
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = isServerPaged ? serverItems : filteredRM.slice(indexOfFirstItem, indexOfLastItem);
-  const displayTotalCount = isServerPaged ? totalCount : filteredRM.length;
+  const currentItems = isServerPaged ? serverItems : [];
+  const displayTotalCount = isServerPaged ? totalCount : 0;
   
   // Modals visibility states
   const [showFormModal, setShowFormModal] = useState(false);
@@ -405,7 +405,20 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     setShowFormModal(true);
   };
 
-  const handleEditRMClick = (rm: RawMaterial) => {
+  // Open Detail Modal with On-Demand Fetch (Lazy Loading)
+  const handleOpenDetailRM = async (rm: RawMaterial) => {
+    setSelectedRMForDetails(rm);
+    try {
+      const full = await materialService.getMaterialById(rm.id);
+      if (full) {
+        setSelectedRMForDetails(full);
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail bahan baku on-demand:', e);
+    }
+  };
+
+  const handleEditRMClick = async (rm: RawMaterial) => {
     setEditingRM(rm);
     setRmCode(rm.code);
     setRmName(rm.name);
@@ -416,8 +429,8 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     setRmCategories(resolvedCats);
     setRmOtherCategorySpec(rm.otherCategorySpecification || '');
     
-    setRmStorage(rm.storageConditions);
-    setRmSds(rm.sdsDocNumber);
+    setRmStorage(rm.storageConditions || 'Suhu ruang (15-25°C), kedap udara & kering');
+    setRmSds(rm.sdsDocNumber || 'SDS-LMS-2026-01');
     setRmManufacturer(rm.manufacturer || '');
     setRmSubstitutes(rm.approvedSubstitutes || []);
     setIsSingleSpecificMaterial(rm.isSingleSpecificMaterial || (rm.approvedSubstitutes && rm.approvedSubstitutes.length === 0));
@@ -469,6 +482,29 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
     );
 
     setShowFormModal(true);
+
+    // Ambil detail lengkap secara on-demand (qc_parameters, SDS, reorder_point, substitutes)
+    try {
+      const full = await materialService.getMaterialById(rm.id);
+      if (full) {
+        setEditingRM(full);
+        if (full.sdsDocNumber) setRmSds(full.sdsDocNumber);
+        if (full.storageConditions) setRmStorage(full.storageConditions);
+        if (full.approvedSubstitutes) setRmSubstitutes(full.approvedSubstitutes);
+        if (full.supplierLeadTimeDays !== undefined) setRmLeadTime(full.supplierLeadTimeDays);
+        if (full.reorderPoint !== undefined) setRmReorderPoint(full.reorderPoint);
+        if (full.sdsFileUrl || full.sdsFileName) {
+          setSdsFileUrl(full.sdsFileUrl || '');
+          setSdsFileName(full.sdsFileName || `Dokumen-SDS-${full.code}.pdf`);
+        }
+        const fullQc = parseQcParameters(full.qcParameters);
+        if (fullQc.length > 0) {
+          setRmQcParams([...fullQc]);
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat detail parameter bahan baku saat edit:', e);
+    }
   };
 
   const handleAddQcParam = () => {
@@ -1073,7 +1109,7 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                     <tr 
                       key={rm.id} 
                       className="hover:bg-purple-50/30 transition-colors cursor-pointer"
-                      onClick={() => setSelectedRMForDetails(rm)}
+                      onClick={() => handleOpenDetailRM(rm)}
                     >
                       {/* Nomor Urut */}
                       <td className="py-1.5 px-2.5 text-center font-mono text-slate-400 font-bold text-[11px]">
@@ -1121,15 +1157,15 @@ export const RndMaterialsTab: React.FC<RndMaterialsTabProps> = ({
                         {rm.manufacturer || <span className="text-slate-400 italic font-normal">Tidak diisi</span>}
                       </td>
                       
-                      {/* QC Parameters Count */}
+                      {/* QC Parameters */}
                       <td className="py-1.5 px-3 font-bold text-slate-600">
                         {rowQcParams.length > 0 ? (
                           <span className="px-2 py-0.5 rounded bg-purple-50 border border-purple-100 text-purple-700 text-[11px] font-bold font-mono">
                             {rowQcParams.length} Parameter
                           </span>
                         ) : (
-                          <span className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.25 rounded text-[10px] font-medium">
-                            0 Parameter
+                          <span className="text-purple-700 bg-purple-50/70 border border-purple-100 px-1.5 py-0.25 rounded text-[10px] font-semibold">
+                            Lihat Detail & QC
                           </span>
                         )}
                       </td>

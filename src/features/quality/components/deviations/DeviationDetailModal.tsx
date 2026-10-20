@@ -23,7 +23,7 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
 }) => {
   useEscapeKey(onClose, isOpen && !!deviation);
 
-  const [activeTab, setActiveTab] = React.useState<'info' | 'review' | 'rca' | 'capa' | 'closure'>(initialTab);
+  const [activeTab, setActiveTab] = React.useState<'sop12' | 'info' | 'review' | 'rca' | 'capa' | 'closure'>(initialTab);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -147,6 +147,15 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
     onUpdated();
   };
 
+  const handleUpdateSeverity = async (newSeverity: 'MINOR' | 'MAJOR' | 'CRITICAL') => {
+    try {
+      await deviationService.updateDeviation(deviation.id, { severity: newSeverity });
+      onUpdated();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Gagal memperbarui tingkat keparahan.');
+    }
+  };
+
   const handleUpdateImpact = async (deptIdx: number, hasImpact: boolean, desc: string) => {
     const impacts = [...(deviation.impacts || [])];
     impacts[deptIdx] = {
@@ -231,6 +240,7 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
         {/* Navigation Tabs */}
         <div className="flex border-b border-slate-200 bg-slate-50 px-6 shrink-0 overflow-x-auto">
           {[
+            { id: 'sop12', label: '12 Tahapan SOP' },
             { id: 'info', label: '1. Detail & Laporan' },
             { id: 'review', label: '2. Kajian Departemen' },
             { id: 'rca', label: '3. Analisa Root Cause' },
@@ -260,6 +270,56 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
             </div>
           )}
 
+          {/* TAB: 12 TAHAPAN SOP */}
+          {activeTab === 'sop12' && (
+            <div className="space-y-4">
+              <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4">
+                <h3 className="font-bold text-orange-900 text-sm mb-1">Alur Tahapan Penanganan Penyimpangan Mutu (12 SOP)</h3>
+                <p className="text-orange-700 text-xs">
+                  Berikut adalah 12 tahapan resmi beserta penanggung jawab (PIC) untuk setiap deviasi yang tercatat dalam sistem sesuai standar operasional prosedur.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {[
+                  { no: 1, stage: 'Pelaporan dan registrasi penyimpangan', pic: 'Departemen pelapor / QA', status: 'Selesai', desc: 'Pencatatan awal laporan penyimpangan ke dalam sistem.' },
+                  { no: 2, stage: 'Uraian kejadian dan persyaratan yang tidak terpenuhi', pic: 'Departemen pelapor', status: 'Selesai', desc: 'Pengisian kronologi detail dan standar/persyaratan yang dilanggar.' },
+                  { no: 3, stage: 'Tindakan segera dan pengamanan produk/proses', pic: 'Departemen terkait', status: deviation?.status !== 'DRAFT' ? 'Selesai' : 'Sedang Berjalan', desc: 'Karantina produk atau penghentian sementara proses terdampak.' },
+                  { no: 4, stage: 'Klasifikasi kategori dan tingkat risiko', pic: 'QA', status: deviation?.severity ? 'Selesai' : 'Menunggu QM', desc: 'Penentuan tingkat keparahan (Minor, Major, Critical) oleh Quality Manager.' },
+                  { no: 5, stage: 'Kajian departemen terkait sesuai kategori penyimpangan', pic: 'Departemen yang ditunjuk', status: Array.isArray(deviation?.impacts) && deviation.impacts.length > 0 ? 'Selesai' : 'Belum Mulai', desc: 'Evaluasi lintas departemen terhadap dampak penyimpangan.' },
+                  { no: 6, stage: 'Investigasi dan pengumpulan bukti', pic: 'Departemen terkait bersama QA', status: deviation?.rootCause ? 'Selesai' : 'Belum Mulai', desc: 'Pengumpulan data pendukung, catatan batch, dan kondisi mesin.' },
+                  { no: 7, stage: 'Analisis akar penyebab', pic: 'Departemen penyebab / terkait bersama QA', status: deviation?.rootCause ? 'Selesai' : 'Belum Mulai', desc: 'Analisis Root Cause (menggunakan 5 Whys / Fishbone / General).' },
+                  { no: 8, stage: 'Penilaian dampak dan keputusan terhadap produk', pic: 'QA bersama departemen terkait', status: deviation?.status === 'CAPA' || deviation?.status === 'CLOSED' ? 'Selesai' : 'Belum Mulai', desc: 'Keputusan disposition produk (Lulus Ber-deviasi, Rework, Reject).' },
+                  { no: 9, stage: 'Penyusunan dan persetujuan CAPA', pic: 'Departemen penanggung jawab dan QA', status: Array.isArray(deviation?.capaActions) && deviation.capaActions.length > 0 ? 'Selesai' : 'Belum Mulai', desc: 'Perencanaan tindakan korektif dan preventif (CAPA).' },
+                  { no: 10, stage: 'Pelaksanaan CAPA', pic: 'PIC yang ditetapkan', status: Array.isArray(deviation?.capaActions) && deviation.capaActions.some(c => c.status === 'COMPLETED' || c.status === 'VERIFIED') ? 'Berjalan / Selesai' : 'Belum Mulai', desc: 'Eksekusi oleh PIC masing-masing aksi CAPA.' },
+                  { no: 11, stage: 'Verifikasi efektivitas CAPA', pic: 'QA dan departemen terkait', status: Array.isArray(deviation?.capaActions) && deviation.capaActions.length > 0 && deviation.capaActions.every(c => c.status === 'VERIFIED') ? 'Selesai' : 'Belum Mulai', desc: 'Pemeriksaan dan validasi bahwa tindakan CAPA efektif mencegah terulangnya deviasi.' },
+                  { no: 12, stage: 'Kesimpulan dan penutupan laporan', pic: 'QA / pejabat berwenang', status: deviation?.status === 'CLOSED' ? 'Selesai (Closed)' : 'Belum Mulai', desc: 'Otorisasi akhir dan penutupan resmi laporan deviasi oleh Quality Manager.' },
+                ].map((item) => (
+                  <div key={item.no} className="bg-white border border-slate-200 rounded-2xl p-4 flex items-start gap-4 shadow-2xs hover:border-orange-300 transition-all">
+                    <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-800 font-black text-xs flex items-center justify-center shrink-0">
+                      {item.no}
+                    </div>
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-slate-900">{item.stage}</h4>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                          item.status.includes('Selesai') || item.status === 'Selesai (Closed)' ? 'bg-emerald-100 text-emerald-800' :
+                          item.status.includes('Berjalan') ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {item.status}
+                        </span>
+                      </div>
+                      <p className="text-slate-600 text-xs">{item.desc}</p>
+                      <p className="text-[11px] text-slate-400 font-medium">
+                        Penanggung Jawab (PIC): <strong className="text-slate-700">{item.pic}</strong>
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* TAB 1: INFO & LAPORAN */}
           {activeTab === 'info' && (
             <div className="space-y-5">
@@ -269,10 +329,22 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
                   <span className="font-bold text-slate-900">{deviation.category}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] uppercase text-slate-400 font-bold block">Keparahan</span>
-                  <span className={`font-bold ${deviation.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'}`}>
-                    {deviation.severity}
-                  </span>
+                  <span className="text-[10px] uppercase text-slate-400 font-bold block">Keparahan (Pengkajian QM)</span>
+                  {isAdminOrQa ? (
+                    <select
+                      value={deviation.severity}
+                      onChange={(e) => handleUpdateSeverity(e.target.value as any)}
+                      className="mt-0.5 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold bg-white focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    >
+                      <option value="MINOR">MINOR</option>
+                      <option value="MAJOR">MAJOR</option>
+                      <option value="CRITICAL">CRITICAL</option>
+                    </select>
+                  ) : (
+                    <span className={`font-bold ${deviation.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'}`}>
+                      {deviation.severity}
+                    </span>
+                  )}
                 </div>
                 <div>
                   <span className="text-[10px] uppercase text-slate-400 font-bold block">Pelapor</span>
@@ -407,7 +479,7 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
                   <span>Daftar Kajian Lintas Departemen Terdaftar ({deviation.impacts?.length || 0})</span>
                 </h4>
 
-                {(!deviation.impacts || deviation.impacts.length === 0) ? (
+                {(!Array.isArray(deviation.impacts) || deviation.impacts.length === 0) ? (
                   <div className="p-6 bg-slate-50 border border-slate-200 border-dashed rounded-2xl text-center text-slate-400 italic">
                     Belum ada kajian departemen yang disubmit. Gunakan form di atas untuk menambahkan kajian.
                   </div>
@@ -609,7 +681,7 @@ export const DeviationDetailModal: React.FC<DeviationDetailModalProps> = ({
 
               {/* CAPA List */}
               <div className="space-y-3">
-                {deviation.capaActions && deviation.capaActions.length > 0 ? (
+                {Array.isArray(deviation.capaActions) && deviation.capaActions.length > 0 ? (
                   deviation.capaActions.map((capa) => (
                     <div key={capa.id} className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between shadow-2xs">
                       <div className="space-y-1">

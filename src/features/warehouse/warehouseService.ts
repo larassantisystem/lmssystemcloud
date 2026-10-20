@@ -18,11 +18,11 @@ export const REJECTED_QC_STATUSES = ['REJECTED'];
 // In-memory runtime cache untuk efisiensi EGRESS (BUKAN local storage)
 let inMemoryGrnRecords: GrnRecord[] = [];
 let lastGrnFetchTime = 0;
-const GRN_CACHE_TTL_MS = 45 * 1000; // 45 detik cache di RAM
+const GRN_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM
 
 // In-memory runtime cache per kueri paginasi
 const paginatedGrnCache = new Map<string, { timestamp: number; data: GrnPaginatedResponse }>();
-const PAGINATED_CACHE_TTL_MS = 30 * 1000; // 30 detik cache di RAM
+const PAGINATED_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM
 
 const knownMissingColumns = new Set<string>();
 
@@ -651,12 +651,13 @@ export const warehouseService = {
 
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
+    const queryTo = from + pageSize; // fetch pageSize + 1 items to check if there is a next page
 
     if (isSupabaseConfigured && supabase) {
       try {
         let query = supabase
           .from('warehouse_grn')
-          .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at', { count: 'exact' });
+          .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at');
 
         if (materialType && materialType !== 'all') {
           query = query.eq('material_type', materialType);
@@ -679,12 +680,15 @@ export const warehouseService = {
           query = query.or(`grn_number.ilike.%${q}%,material_code.ilike.%${q}%,material_name.ilike.%${q}%,distributor.ilike.%${q}%,supplier_batch_number.ilike.%${q}%,batch_number.ilike.%${q}%,internal_lot_number.ilike.%${q}%`);
         }
 
-        const { data, count, error } = await query
+        const { data, error } = await query
           .order('created_at', { ascending: false })
-          .range(from, to);
+          .range(from, queryTo);
 
         if (!error && data) {
-          let records: GrnRecord[] = data
+          const hasMore = data.length > pageSize;
+          const rawItems = hasMore ? data.slice(0, pageSize) : data;
+
+          let records: GrnRecord[] = rawItems
             .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
             .map(mapDbRowToGrnRecord);
 
@@ -694,9 +698,7 @@ export const warehouseService = {
             records = records.filter((r) => r.qcStatus === 'QUARANTINE');
           }
 
-          const totalItems = count !== null && count !== undefined
-            ? (status === 'REVERTED_TO_WAREHOUSE' || status === 'QUARANTINE' ? records.length : count)
-            : records.length;
+          const totalItems = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + records.length;
           const totalPages = Math.ceil(totalItems / pageSize) || 1;
           const result: GrnPaginatedResponse = {
             records,

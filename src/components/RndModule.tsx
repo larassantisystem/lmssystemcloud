@@ -57,7 +57,7 @@ export const RndModule: React.FC<RndModuleProps> = ({
     variants: 0,
   });
 
-  // Load lightweight summary counts on mount
+  // Lazy loading: Only fetch counts on mount
   useEffect(() => {
     materialService.getMaterialsCount().then((count) => setCounts((prev) => ({ ...prev, rm: count })));
     packagingService.getPackagingMaterialsCount().then((count) => setCounts((prev) => ({ ...prev, pm: count })));
@@ -65,27 +65,6 @@ export const RndModule: React.FC<RndModuleProps> = ({
       setCounts((prev) => ({ ...prev, pj: totalProducts, variants: totalVariants }))
     );
   }, []);
-
-  // Lazy loading: Only fetch complete lists when Formula or BOM Calculator tab is opened
-  useEffect(() => {
-    if (activeSubTab === 'formula' || activeSubTab === 'bom-calculator') {
-      if (rawMaterials.length === 0) {
-        materialService.getMaterials().then((res) => res && setRawMaterials(res));
-      }
-      if (packagingMaterials.length === 0) {
-        packagingService.getPackagingMaterials().then((res) => res && setPackagingMaterials(res));
-      }
-      if (products.length === 0) {
-        productService.getProducts().then((res) => res && setProducts(res));
-      }
-      if (formulations.length === 0) {
-        formulaService.getFormulations().then((res) => {
-          setFormulations(res);
-          if (res.length > 0 && !selectedFormulation) setSelectedFormulation(res[0]);
-        });
-      }
-    }
-  }, [activeSubTab, rawMaterials.length, packagingMaterials.length, products.length, formulations.length, selectedFormulation]);
 
   const handleSaveRM = async (newRM: RawMaterial) => {
     const res = await materialService.saveSingleMaterial(newRM);
