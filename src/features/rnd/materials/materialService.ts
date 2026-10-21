@@ -318,34 +318,14 @@ export const materialService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        let allData: any[] = [];
-        let page = 0;
-        const pageSize = 1000;
-        let hasMore = true;
+        const { data, error } = await supabase
+          .from('raw_materials')
+          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions, qc_parameters')
+          .order('code', { ascending: true })
+          .limit(5000);
 
-        while (hasMore) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-          const { data, error } = await supabase
-            .from('raw_materials')
-            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions, qc_parameters')
-            .order('code', { ascending: true })
-            .range(from, to);
-
-          if (error || !data || data.length === 0) {
-            hasMore = false;
-          } else {
-            allData = allData.concat(data);
-            if (data.length < pageSize) {
-              hasMore = false;
-            } else {
-              page++;
-            }
-          }
-        }
-
-        if (allData.length > 0) {
-          const mapped: RawMaterial[] = allData.map((m: any) => {
+        if (!error && data && data.length > 0) {
+          const mapped: RawMaterial[] = data.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
               ? rawCats 
@@ -378,7 +358,7 @@ export const materialService = {
           return mapped;
         }
       } catch (err) {
-        console.error('[Supabase Audit] Supabase raw materials fetch exception:', err);
+        console.error('[materialService] D1 raw materials fetch exception:', err);
       }
     }
 

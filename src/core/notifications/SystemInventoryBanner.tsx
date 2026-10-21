@@ -27,12 +27,6 @@ export const SystemInventoryBanner: React.FC<SystemInventoryBannerProps> = ({ on
       }
     };
     fetchAlerts();
-    const interval = setInterval(() => {
-      if (typeof document !== 'undefined' && !document.hidden) {
-        fetchAlerts();
-      }
-    }, 180000); // 3 menit untuk efisiensi egress
-    return () => clearInterval(interval);
   }, [isRelevantDept]);
 
   if (dismissed || ropAlerts.length === 0) {

@@ -7,10 +7,11 @@
 import { cloudflareD1 } from '../cloudflare/cloudflareClient';
 
 export const isCloudflareConfigured = true;
-export const isSupabaseConfigured = true; // Flag maintained for existing consumer modules
+export const isD1Configured = true;
+export const isSupabaseConfigured = true; // Compatibility flag for existing modules
 
-// Supabase PostgREST adapter powered by Cloudflare D1
-export const supabase = cloudflareD1 as any;
+export const d1 = cloudflareD1;
 export const cloudflare = cloudflareD1;
+export const supabase = cloudflareD1 as any; // PostgREST-compatible syntax adapter powered by Cloudflare D1
 
 export default cloudflareD1;

@@ -112,14 +112,14 @@ class CloudflareD1Client {
         const identifier = (email || '').trim();
         const nikCandidate = identifier.includes('@') ? identifier.split('@')[0] : identifier;
         const sql = `
-          SELECT * FROM profiles 
-          WHERE LOWER(email) = LOWER(?) 
-             OR LOWER(nik) = LOWER(?) 
-             OR LOWER(nik) = LOWER(?)
-             OR LOWER(id) = LOWER(?)
+          SELECT * FROM profiles WHERE nik = ? COLLATE NOCASE
+          UNION ALL
+          SELECT * FROM profiles WHERE email = ? COLLATE NOCASE
+          UNION ALL
+          SELECT * FROM profiles WHERE id = ?
           LIMIT 1
         `;
-        const res = await this.query(sql, [identifier, identifier, nikCandidate, identifier]);
+        const res = await this.query(sql, [nikCandidate, identifier, identifier]);
         const profile = res.results[0];
 
         if (!profile) {

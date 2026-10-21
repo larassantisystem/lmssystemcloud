@@ -320,6 +320,8 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 CREATE INDEX IF NOT EXISTS idx_profiles_nik ON profiles(nik);
+CREATE INDEX IF NOT EXISTS idx_profiles_nik_nocase ON profiles(nik COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_profiles_email_nocase ON profiles(email COLLATE NOCASE);
 
 -- 11. PENGUJIAN IN-PROCESS CONTROL (IPC BULK BATCHES)
 CREATE TABLE IF NOT EXISTS ipc_bulk_batches (

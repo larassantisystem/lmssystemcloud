@@ -556,7 +556,7 @@ export const warehouseService = {
         }
       }
 
-      if (isSupabaseConfigured && supabase) {
+      if (inMemoryGrnRecords.length === 0 && isSupabaseConfigured && supabase) {
         try {
           let { data, error }: { data: any; error: any } = await withTimeout(
             supabase

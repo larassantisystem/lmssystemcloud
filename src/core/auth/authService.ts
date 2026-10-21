@@ -114,7 +114,7 @@ export const authService = {
         let authUser: any = null;
         let lastAuthError: string | null = null;
 
-        // 1. Coba login via Supabase Auth dengan variasi email yang relevan
+        let authSessionUser: any = null;
         for (const candidateEmail of targetEmails) {
           const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
             email: candidateEmail,
@@ -122,6 +122,7 @@ export const authService = {
           });
           if (!authErr && authData?.user) {
             authUser = authData.user;
+            authSessionUser = (authData.session as any)?.user;
             break;
           } else if (authErr) {
             lastAuthError = authErr.message;
@@ -130,11 +131,15 @@ export const authService = {
 
         // 2. Jika Supabase Auth berhasil
         if (authUser) {
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('id, nik, name, department, role, position, email, password')
-            .or(`id.eq.${authUser.id},nik.ilike.${cleanNik},email.ilike.${primaryEmail}`)
-            .maybeSingle();
+          let profileData = authSessionUser;
+          if (!profileData || !profileData.nik) {
+            const res = await supabase
+              .from('profiles')
+              .select('id, nik, name, department, role, position, email, password')
+              .or(`id.eq.${authUser.id},nik.ilike.${cleanNik},email.ilike.${primaryEmail}`)
+              .maybeSingle();
+            profileData = res?.data;
+          }
 
           const isAdminUser = profileData?.role === 'admin' || cleanNik.toLowerCase() === 'admin' || profileData?.nik?.toLowerCase() === 'admin' || authUser.user_metadata?.role === 'admin';
           const resolvedNik = isAdminUser ? 'admin' : (profileData?.nik || (authUser.user_metadata?.nik as string) || cleanNik);

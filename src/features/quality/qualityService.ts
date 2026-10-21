@@ -80,10 +80,10 @@ export const qualityService = {
   getReports: async (): Promise<QcInspectionReport[]> => {
     let storedReports: QcInspectionReport[] = [...memoryReports];
 
-    // Always fetch fresh master data from services to ensure Bagian B QC parameters are fully synchronized from Master Data
+    // Fetch master data from services (uses memory cache to protect against redundant D1 table scans)
     let [packagingMaterials, rawMaterials, grnRecords] = await Promise.all([
-      packagingService.getPackagingMaterials(true),
-      materialService.getMaterials(true),
+      packagingService.getPackagingMaterials(),
+      materialService.getMaterials(),
       warehouseService.getGrnRecords(),
     ]);
     let isModified = false;
@@ -117,7 +117,10 @@ export const qualityService = {
       const cleanName = (grn.materialName || '').trim().toLowerCase();
 
       if (isPackagingType) {
-        let matchedPM = cleanCode ? packagingMaterials.find((pm) => (pm.code || "").trim().toLowerCase() === cleanCode) : undefined;
+        let matchedPM = grn.materialId ? packagingMaterials.find((pm) => pm.id === grn.materialId) : undefined;
+        if (!matchedPM && cleanCode) {
+          matchedPM = packagingMaterials.find((pm) => (pm.code || "").trim().toLowerCase() === cleanCode);
+        }
         if (!matchedPM && cleanName) {
           matchedPM = packagingMaterials.find((pm) => (pm.name || "").trim().toLowerCase() === cleanName);
         }
@@ -130,7 +133,10 @@ export const qualityService = {
             }));
         }
       } else {
-        let matchedRM = cleanCode ? rawMaterials.find((rm) => (rm.code || "").trim().toLowerCase() === cleanCode) : undefined;
+        let matchedRM = grn.materialId ? rawMaterials.find((rm) => rm.id === grn.materialId) : undefined;
+        if (!matchedRM && cleanCode) {
+          matchedRM = rawMaterials.find((rm) => (rm.code || "").trim().toLowerCase() === cleanCode);
+        }
         if (!matchedRM && cleanName) {
           matchedRM = rawMaterials.find((rm) => (rm.name || "").trim().toLowerCase() === cleanName);
         }
@@ -773,9 +779,9 @@ export const qualityService = {
       report.lotInternalNumber
     );
 
-    // Re-resolve master parameters to ensure strictly current master data
-    const packagingMaterials = await packagingService.getPackagingMaterials(true);
-    const rawMaterials = await materialService.getMaterials(true);
+    // Re-resolve master parameters using cached master data
+    const packagingMaterials = await packagingService.getPackagingMaterials();
+    const rawMaterials = await materialService.getMaterials();
     
     let masterParams: Array<{ name: string; spec: string }> = [];
     const isPackagingType = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((report.materialType || '').trim().toLowerCase()) ||
@@ -785,11 +791,14 @@ export const qualityService = {
     const cleanName = (report.materialName || '').trim().toLowerCase();
 
     if (isPackagingType) {
-      let matchedPM = cleanCode ? packagingMaterials.find((item) => (item.code || "").trim().toLowerCase() === cleanCode) : undefined;
-    if (!matchedPM && cleanName) {
-      matchedPM = packagingMaterials.find((item) => (item.name || "").trim().toLowerCase() === cleanName);
-    }
-    const pm = matchedPM;
+      let matchedPM = (report as any).materialId ? packagingMaterials.find((item) => item.id === (report as any).materialId) : undefined;
+      if (!matchedPM && cleanCode) {
+        matchedPM = packagingMaterials.find((item) => (item.code || "").trim().toLowerCase() === cleanCode);
+      }
+      if (!matchedPM && cleanName) {
+        matchedPM = packagingMaterials.find((item) => (item.name || "").trim().toLowerCase() === cleanName);
+      }
+      const pm = matchedPM;
       if (pm?.qcParameters && pm.qcParameters.length > 0) {
         masterParams = pm.qcParameters
           .filter(p => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
@@ -799,11 +808,14 @@ export const qualityService = {
           }));
       }
     } else {
-      let matchedRM = cleanCode ? rawMaterials.find((item) => (item.code || "").trim().toLowerCase() === cleanCode) : undefined;
-    if (!matchedRM && cleanName) {
-      matchedRM = rawMaterials.find((item) => (item.name || "").trim().toLowerCase() === cleanName);
-    }
-    const rm = matchedRM;
+      let matchedRM = (report as any).materialId ? rawMaterials.find((item) => item.id === (report as any).materialId) : undefined;
+      if (!matchedRM && cleanCode) {
+        matchedRM = rawMaterials.find((item) => (item.code || "").trim().toLowerCase() === cleanCode);
+      }
+      if (!matchedRM && cleanName) {
+        matchedRM = rawMaterials.find((item) => (item.name || "").trim().toLowerCase() === cleanName);
+      }
+      const rm = matchedRM;
       if (rm?.qcParameters && rm.qcParameters.length > 0) {
         masterParams = rm.qcParameters
           .filter(p => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
@@ -1284,14 +1296,14 @@ export const qualityService = {
       const cleanName = (rep.materialName || '').trim().toLowerCase();
 
       if (isPackagingType) {
-        const pm = packagingMaterials.find(
-          (p) => {
-            const pCode = (p.code || '').trim().toLowerCase();
-            const pName = (p.name || '').trim().toLowerCase();
-            return (cleanCode && pCode === cleanCode) ||
-                   (cleanName && (pName === cleanName || pName.includes(cleanName) || cleanName.includes(pName)));
-          }
-        );
+        let matchedPM = (rep as any).materialId ? packagingMaterials.find((p) => p.id === (rep as any).materialId) : undefined;
+        if (!matchedPM && cleanCode) {
+          matchedPM = packagingMaterials.find((p) => (p.code || '').trim().toLowerCase() === cleanCode);
+        }
+        if (!matchedPM && cleanName) {
+          matchedPM = packagingMaterials.find((p) => (p.name || '').trim().toLowerCase() === cleanName);
+        }
+        const pm = matchedPM;
         if (pm?.qcParameters && pm.qcParameters.length > 0) {
           masterParams = pm.qcParameters
             .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
@@ -1301,14 +1313,14 @@ export const qualityService = {
             }));
         }
       } else {
-        const rm = rawMaterials.find(
-          (r) => {
-            const rCode = (r.code || '').trim().toLowerCase();
-            const rName = (r.name || '').trim().toLowerCase();
-            return (cleanCode && rCode === cleanCode) ||
-                   (cleanName && (rName === cleanName || rName.includes(cleanName) || cleanName.includes(rName)));
-          }
-        );
+        let matchedRM = (rep as any).materialId ? rawMaterials.find((r) => r.id === (rep as any).materialId) : undefined;
+        if (!matchedRM && cleanCode) {
+          matchedRM = rawMaterials.find((r) => (r.code || '').trim().toLowerCase() === cleanCode);
+        }
+        if (!matchedRM && cleanName) {
+          matchedRM = rawMaterials.find((r) => (r.name || '').trim().toLowerCase() === cleanName);
+        }
+        const rm = matchedRM;
         if (rm?.qcParameters && rm.qcParameters.length > 0) {
           masterParams = rm.qcParameters
             .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))

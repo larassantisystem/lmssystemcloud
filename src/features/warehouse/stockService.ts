@@ -15,14 +15,20 @@ import { normalizeLotNumber } from '../quality/utils/qcNumbering';
 import { formatToIsoDateString } from '../../core/utils/dateUtils';
 import { supabase, isSupabaseConfigured } from '../../core/auth/supabaseClient';
 
-// In-memory runtime cache untuk efisiensi EGRESS Supabase (BUKAN local storage)
+// In-memory runtime cache untuk efisiensi EGRESS Cloudflare D1
 let inMemoryMovementLedger: StockMovementLedger[] = [];
 let lastMovementLedgerFetchTime = 0;
 const MOVEMENT_CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM
 
+let inMemoryStockLots: StockLotItem[] = [];
+let lastStockLotsFetchTime = 0;
+const STOCK_LOTS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM
+
 export const stockService = {
   invalidateStockCache: () => {
     lastMovementLedgerFetchTime = 0;
+    lastStockLotsFetchTime = 0;
+    inMemoryStockLots = [];
   },
   /**
    * Simpan riwayat mutasi stok ke tabel public.stock_movements di Supabase (Opsi 2)
@@ -63,8 +69,12 @@ export const stockService = {
   /**
    * Get all active stock lots and synchronize with latest GRNs and QC inspection states
    */
-  getStockLots: async (): Promise<StockLotItem[]> => {
-    // Fast resolution: Gunakan local in-memory master materials terlebih dahulu untuk mencegah download 1.84MB berulang kali
+  getStockLots: async (forceRefresh = false): Promise<StockLotItem[]> => {
+    if (!forceRefresh && inMemoryStockLots.length > 0 && (Date.now() - lastStockLotsFetchTime < STOCK_LOTS_CACHE_TTL_MS)) {
+      return inMemoryStockLots;
+    }
+
+    // Fast resolution: Gunakan local in-memory master materials terlebih dahulu untuk mencegah download berulang kali
     let rawMaterials = materialService.getLocalMaterials();
     let packMaterials = packagingService.getLocalPackagingMaterials();
 
@@ -188,6 +198,8 @@ export const stockService = {
       };
     });
 
+    inMemoryStockLots = storedLots;
+    lastStockLotsFetchTime = Date.now();
     return storedLots;
   },
 
@@ -198,7 +210,10 @@ export const stockService = {
     const lots = await stockService.getStockLots();
 
     if (materialType === 'raw') {
-      const rawMaterials = await materialService.getMaterials();
+      let rawMaterials = materialService.getLocalMaterials();
+      if (rawMaterials.length === 0) {
+        rawMaterials = await materialService.getMaterials();
+      }
       return rawMaterials.map((rm) => {
         const materialLots = lots.filter(
           (l) => l.materialType === 'raw' && (l.materialCode === rm.code || l.materialName.toLowerCase() === rm.name.toLowerCase())
@@ -238,7 +253,10 @@ export const stockService = {
         };
       });
     } else {
-      const packagingMaterials = await packagingService.getPackagingMaterials();
+      let packagingMaterials = packagingService.getLocalPackagingMaterials();
+      if (packagingMaterials.length === 0) {
+        packagingMaterials = await packagingService.getPackagingMaterials();
+      }
       return packagingMaterials.map((pm) => {
         const materialLots = lots.filter(
           (l) => l.materialType === 'packaging' && (l.materialCode === pm.code || l.materialName.toLowerCase() === pm.name.toLowerCase())
@@ -670,14 +688,16 @@ export const stockService = {
     if (!materialName || materialName.trim().toUpperCase() === cleanCode) {
       try {
         if (materialType === 'raw') {
-          const rms = await materialService.getMaterials();
+          let rms = materialService.getLocalMaterials();
+          if (rms.length === 0) rms = await materialService.getMaterials();
           const found = rms.find((r) => 
             r.code?.trim().toUpperCase() === cleanCode ||
             r.id?.trim().toUpperCase() === cleanCode
           );
           if (found) materialName = found.name;
         } else {
-          const pms = await packagingService.getPackagingMaterials();
+          let pms = packagingService.getLocalPackagingMaterials();
+          if (pms.length === 0) pms = await packagingService.getPackagingMaterials();
           const found = pms.find((p) => 
             p.code?.trim().toUpperCase() === cleanCode ||
             p.id?.trim().toUpperCase() === cleanCode

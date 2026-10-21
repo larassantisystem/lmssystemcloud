@@ -102,32 +102,32 @@ export const DepartmentWorkspaceDashboard: React.FC<DepartmentWorkspaceDashboard
 
   const loadData = async () => {
     try {
-      // 1. QC Reports
-      const reports = await qualityService.getReports();
+      // 1. QC Reports & Warehouse GRNs
+      const [reports, grns, notifs] = await Promise.all([
+        qualityService.getReports(),
+        warehouseService.getGrnRecords(),
+        departmentNotificationService.getNotifications()
+      ]);
       setQcReports(reports);
-
-      // 2. Warehouse GRNs
-      const grns = await warehouseService.getGrnRecords();
       setGrnRecords(grns);
-
-      // 3. Notifications
-      const notifs = await departmentNotificationService.getNotifications();
       setNotifications(notifs);
 
-      // 4. Master Data
-      const [mats, packs, prods, forms, stocks] = await Promise.all([
-        materialService.getMaterials(),
-        packagingService.getPackagingMaterials(),
-        productService.getProducts(),
-        formulaService.getFormulations(),
-        stockService.getStockLots()
-      ]);
-
-      setRawMaterialsCount(mats.length);
-      setPackagingCount(packs.length);
-      setProductsCount(prods.length);
-      setFormulasCount(forms.length);
-      setStockItemsCount(stocks.length);
+      // 2. Master Data Counts (Fast count query without loading thousands of full records)
+      try {
+        const countsRes = await fetch('/api/dashboard/counts');
+        const countsData = await countsRes.json();
+        if (countsData.counts) {
+          setRawMaterialsCount(countsData.counts.rawMaterialsCount || 0);
+          setPackagingCount(countsData.counts.packagingCount || 0);
+          setProductsCount(countsData.counts.productsCount || 0);
+          setFormulasCount(countsData.counts.formulasCount || 0);
+          setStockItemsCount(countsData.counts.grnCount || 0);
+        }
+      } catch (err) {
+        // Fallback to local memory caches if available
+        setRawMaterialsCount(materialService.getLocalMaterials().length);
+        setPackagingCount(packagingService.getLocalPackagingMaterials().length);
+      }
     } catch (e) {
       console.error('Error loading dashboard data:', e);
     } finally {
@@ -138,12 +138,7 @@ export const DepartmentWorkspaceDashboard: React.FC<DepartmentWorkspaceDashboard
 
   useEffect(() => {
     loadData();
-    const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && !document.hidden) {
-        loadData();
-      }
-    }, 180000); // 3 menit jika tab aktif untuk efisiensi egress Supabase
-    return () => clearInterval(timer);
+    // Only load on mount; user can click Refresh Data manually when needed
   }, []);
 
   const handleManualRefresh = () => {

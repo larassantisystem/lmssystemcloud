@@ -453,7 +453,48 @@ function isRemoteCloudflareConfigured(): boolean {
   return Boolean(activeCfConfig.accountId && activeCfConfig.databaseId && activeCfConfig.apiToken);
 }
 
-async function executeD1Query(sql: string, params: any[] = []): Promise<{ results: any[]; changes?: number; lastInsertRowid?: number }> {
+// In-Memory Query Cache for Cloudflare D1 to eliminate redundant row reads
+interface D1CacheEntry {
+  timestamp: number;
+  data: { results: any[]; changes?: number; lastInsertRowid?: number };
+}
+const d1QueryCache = new Map<string, D1CacheEntry>();
+const D1_CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit TTL untuk cache pembacaan (SELECT)
+
+function isCacheableSelect(sql: string): boolean {
+  const trimmed = sql.trim().toUpperCase();
+  return (trimmed.startsWith('SELECT') || trimmed.startsWith('PRAGMA')) && !trimmed.includes('RANDOM()');
+}
+
+function getCacheKey(sql: string, params: any[] = []): string {
+  return `${sql.trim()}::${JSON.stringify(params)}`;
+}
+
+function invalidateD1Cache() {
+  d1QueryCache.clear();
+}
+
+async function executeD1Query(
+  sql: string, 
+  params: any[] = [], 
+  bypassCache = false
+): Promise<{ results: any[]; changes?: number; lastInsertRowid?: number }> {
+  const trimmed = sql.trim();
+  const isSelect = /^SELECT/i.test(trimmed) || /^PRAGMA/i.test(trimmed);
+
+  // Invalidate read cache immediately when any mutation occurs
+  if (!isSelect) {
+    invalidateD1Cache();
+  } else if (!bypassCache) {
+    const key = getCacheKey(sql, params);
+    const cached = d1QueryCache.get(key);
+    if (cached && (Date.now() - cached.timestamp < D1_CACHE_TTL_MS)) {
+      return cached.data;
+    }
+  }
+
+  let queryResult: { results: any[]; changes?: number; lastInsertRowid?: number };
+
   if (isRemoteCloudflareConfigured()) {
     const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${activeCfConfig.accountId}/d1/database/${activeCfConfig.databaseId}/query`;
     const res = await fetch(cfUrl, {
@@ -469,29 +510,35 @@ async function executeD1Query(sql: string, params: any[] = []): Promise<{ result
       throw new Error(cfData.errors?.[0]?.message || 'Cloudflare D1 API request failed');
     }
     const resultObj = cfData.result?.[0] || {};
-    return {
+    queryResult = {
       results: resultObj.results || [],
       changes: resultObj.meta?.changes,
       lastInsertRowid: resultObj.meta?.last_row_id,
     };
-  }
-
-  // Local SQLite D1 Engine
-  const trimmed = sql.trim();
-  const isSelect = /^SELECT/i.test(trimmed) || /^PRAGMA/i.test(trimmed);
-  const stmt = db.prepare(sql);
-
-  if (isSelect) {
-    const results = stmt.all(...params);
-    return { results };
   } else {
-    const info = stmt.run(...params);
-    return {
-      results: [],
-      changes: info.changes,
-      lastInsertRowid: Number(info.lastInsertRowid),
-    };
+    // Local SQLite D1 Engine
+    const stmt = db.prepare(sql);
+
+    if (isSelect) {
+      const results = stmt.all(...params);
+      queryResult = { results };
+    } else {
+      const info = stmt.run(...params);
+      queryResult = {
+        results: [],
+        changes: Number(info.changes),
+        lastInsertRowid: Number(info.lastInsertRowid),
+      };
+    }
   }
+
+  // Save SELECT results into cache
+  if (isSelect) {
+    const key = getCacheKey(sql, params);
+    d1QueryCache.set(key, { timestamp: Date.now(), data: queryResult });
+  }
+
+  return queryResult;
 }
 
 async function autoMigrateDatabase() {
@@ -1891,14 +1938,14 @@ app.get('/api/health', async (req: Request, res: Response) => {
   }
 });
 
-// Universal D1 SQL Execution Endpoint
+// Universal D1 SQL Execution Endpoint with Query Cache
 app.post('/api/d1/query', async (req: Request, res: Response) => {
   try {
-    const { sql, params = [] } = req.body;
+    const { sql, params = [], bypassCache = false, forceFresh = false } = req.body;
     if (!sql || typeof sql !== 'string') {
       return res.status(400).json({ error: 'SQL query string is required' });
     }
-    const result = await executeD1Query(sql, params);
+    const result = await executeD1Query(sql, params, bypassCache || forceFresh);
     res.json({
       success: true,
       results: result.results,
@@ -1912,19 +1959,40 @@ app.post('/api/d1/query', async (req: Request, res: Response) => {
   }
 });
 
-// Batch Transaction Execution
+// Batch Transaction Execution (Invalidates query cache)
 app.post('/api/d1/batch', async (req: Request, res: Response) => {
   try {
     const { statements } = req.body;
     if (!Array.isArray(statements)) {
       return res.status(400).json({ error: 'Array of statements is required' });
     }
+    invalidateD1Cache();
     const batchResults = [];
     for (const stmt of statements) {
-      const resStmt = await executeD1Query(stmt.sql, stmt.params || []);
+      const resStmt = await executeD1Query(stmt.sql, stmt.params || [], true);
       batchResults.push(resStmt);
     }
     res.json({ success: true, results: batchResults });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Optimized Aggregate Dashboard Counts (1 single query, zero table scanning)
+app.get('/api/dashboard/counts', async (_req: Request, res: Response) => {
+  try {
+    const statsSql = `
+      SELECT
+        (SELECT COUNT(*) FROM raw_materials) as rawMaterialsCount,
+        (SELECT COUNT(*) FROM packaging_materials) as packagingCount,
+        (SELECT COUNT(*) FROM products) as productsCount,
+        (SELECT COUNT(*) FROM bulk_formulations) as formulasCount,
+        (SELECT COUNT(*) FROM warehouse_grn WHERE grn_number != 'SYSTEM-STOCK-LEDGER') as grnCount,
+        (SELECT COUNT(*) FROM qc_inspection_reports) as qcCount,
+        (SELECT COUNT(*) FROM stock_movements) as stockMovementsCount
+    `;
+    const resStats = await executeD1Query(statsSql);
+    res.json({ success: true, counts: resStats.results[0] || {} });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

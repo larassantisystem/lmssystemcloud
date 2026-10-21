@@ -331,34 +331,14 @@ export const packagingService = {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        let allData: any[] = [];
-        let page = 0;
-        const pageSize = 1000;
-        let hasMore = true;
+        const { data, error } = await supabase
+          .from('packaging_materials')
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions, qc_parameters')
+          .order('code', { ascending: true })
+          .limit(5000);
 
-        while (hasMore) {
-          const from = page * pageSize;
-          const to = from + pageSize - 1;
-          const { data, error } = await supabase
-            .from('packaging_materials')
-            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions, qc_parameters')
-            .order('code', { ascending: true })
-            .range(from, to);
-
-          if (error || !data || data.length === 0) {
-            hasMore = false;
-          } else {
-            allData = allData.concat(data);
-            if (data.length < pageSize) {
-              hasMore = false;
-            } else {
-              page++;
-            }
-          }
-        }
-
-        if (allData.length > 0) {
-          const mapped: PackagingMaterial[] = allData.map((p: any) => ({
+        if (!error && data && data.length > 0) {
+          const mapped: PackagingMaterial[] = data.map((p: any) => ({
             id: p.id,
             code: p.code,
             specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
@@ -380,7 +360,7 @@ export const packagingService = {
           return mapped;
         }
       } catch (err) {
-        console.error('[Supabase Audit] Supabase packaging materials fetch exception:', err);
+        console.error('[packagingService] D1 packaging materials fetch exception:', err);
       }
     }
 
