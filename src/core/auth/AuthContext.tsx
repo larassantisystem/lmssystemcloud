@@ -52,7 +52,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (user) {
           logout();
         }
-      }, 5 * 60 * 1000); // 5 minutes
+      }, 20 * 60 * 1000); // 20 minutes
     };
 
     const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];

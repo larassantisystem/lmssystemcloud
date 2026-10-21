@@ -7,7 +7,7 @@ let inMemoryRawMaterials: RawMaterial[] = [];
 let lastFetchTime = 0;
 let cachedTotalCount: number | null = null;
 let lastCountFetchTime = 0;
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM browser untuk menghemat egress
+const CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM browser untuk menghemat egress
 const paginatedCache = new Map<string, { timestamp: number; result: any }>();
 const materialDetailCache = new Map<string, { timestamp: number; data: RawMaterial }>();
 

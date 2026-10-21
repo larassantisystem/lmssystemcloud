@@ -56,7 +56,7 @@ let inMemoryFormulations: BulkFormulation[] = [...defaultFormulations];
 let lastFormulationsFetchTime = 0;
 let cachedFormulaCount: number | null = null;
 let lastCountFetchTime = 0;
-const FORMULATIONS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM untuk efisiensi egress Supabase
+const FORMULATIONS_CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM untuk efisiensi egress Supabase
 const paginatedFormulaCache = new Map<string, { timestamp: number; result: any }>();
 const formulaDetailCache = new Map<string, { timestamp: number; data: BulkFormulation }>();
 

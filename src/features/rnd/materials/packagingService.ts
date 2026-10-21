@@ -7,7 +7,7 @@ let inMemoryPackaging: PackagingMaterial[] = [];
 let lastFetchTime = 0;
 let cachedTotalCount: number | null = null;
 let lastCountFetchTime = 0;
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 menit cache di RAM browser untuk menghemat egress
+const CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM browser untuk menghemat egress
 const paginatedCache = new Map<string, { timestamp: number; result: any }>();
 const detailCache = new Map<string, { timestamp: number; data: PackagingMaterial }>();
 
@@ -177,7 +177,7 @@ export const packagingService = {
       try {
         let query = supabase
           .from('packaging_materials')
-          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions');
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, reorder_point, last_modified_by, last_modified_at');
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -275,6 +275,53 @@ export const packagingService = {
       .slice(0, limit)
       .map((p) => ({ id: p.id, code: p.code, name: p.name, type: p.type }));
   },
+
+  getBasicPackagingMaterialsPaginated: async (params: {
+        page?: number;
+        pageSize?: number;
+        search?: string;
+    }): Promise<{ items: PackagingMaterial[]; totalCount: number; page: number; pageSize: number; totalPages: number }> => {
+        const page = Math.max(1, params.page || 1);
+        const pageSize = Math.max(1, params.pageSize || 50);
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+
+        if (isSupabaseConfigured && supabase) {
+            try {
+                let query = supabase
+                    .from('packaging_materials')
+                    .select('id, code, name');
+                if (params.search && params.search.trim()) {
+                    const s = params.search.trim();
+                    query = query.or(`name.ilike.%${s}%,code.ilike.%${s}%`);
+                }
+                query = query.order('code', { ascending: true }).range(from, to);
+                const { data, error } = await query;
+                if (!error && data) {
+                    const mapped: PackagingMaterial[] = data.map((p: any) => ({
+                        id: p.id,
+                        code: p.code,
+                        name: p.name,
+                        specNumber: '',
+                        type: 'primary',
+                        unit: 'Pcs',
+                        storageConditions: '',
+                        qcParameters: [],
+                    } as PackagingMaterial));
+                    return {
+                        items: mapped,
+                        totalCount: 0,
+                        page,
+                        pageSize,
+                        totalPages: 1,
+                    };
+                }
+            } catch (err) {
+                console.warn('[packagingService] basic query error:', err);
+            }
+        }
+        return { items: [], totalCount: 0, page, pageSize, totalPages: 1 };
+    },
 
   getPackagingMaterials: async (forceRefresh = false): Promise<PackagingMaterial[]> => {
     const isCacheValid = !forceRefresh && inMemoryPackaging.length > 0 && (Date.now() - lastFetchTime < CACHE_TTL_MS);

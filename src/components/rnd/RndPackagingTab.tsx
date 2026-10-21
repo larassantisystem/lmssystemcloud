@@ -27,6 +27,7 @@ import {
   EyeOff,
   RefreshCw,
 } from 'lucide-react';
+import { QrSticker } from './QrSticker';
 
 interface RndPackagingTabProps {
   packagingMaterials: PackagingMaterial[];
@@ -170,11 +171,10 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
   const fetchServerPage = useCallback(async (page: number, size: number, search: string, type: string) => {
     setIsLoadingPage(true);
     try {
-      const res = await packagingService.getPackagingMaterialsPaginated({
+      const res = await packagingService.getBasicPackagingMaterialsPaginated({
         page,
         pageSize: size,
         search,
-        type,
       });
       setServerItems(res.items);
       setTotalCount(res.totalCount);
@@ -836,18 +836,13 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                 <th className="py-2 px-2.5 text-center w-10">No</th>
                 <th className="py-2 px-3">Kode PM</th>
                 <th className="py-2 px-3">Nama Kemasan</th>
-                <th className="py-2 px-3">Tipe Kemasan</th>
-                <th className="py-2 px-3">Kapasitas</th>
-                <th className="py-2 px-3">Satuan</th>
-                <th className="py-2 px-3">Supplier</th>
-                <th className="py-2 px-3">Kondisi Penyimpanan</th>
                 <th className="py-2 px-3 text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
               {currentItems.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
+                  <td colSpan={4} className="py-8 text-center text-slate-400">
                     <Boxes className="w-8 h-8 mx-auto mb-1.5 text-slate-300" />
                     <p className="font-semibold text-slate-600 text-xs">Tidak ada data bahan kemas yang cocok</p>
                     <p className="text-[11px] text-slate-400 mt-0.5">Coba gunakan kata kunci pencarian lain atau klik Tambah Bahan Kemas.</p>
@@ -861,45 +856,12 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                     </td>
                     <td className="py-1.5 px-3 font-mono">
                       <div className="font-bold text-purple-700 text-xs">{pm.code}</div>
-                      <div className="text-[10px] font-mono text-slate-500 font-semibold">{pm.specNumber || `SP-BK-${pm.code}`}</div>
                     </td>
                     <td className="py-1.5 px-3">
                       <div className="font-bold text-slate-800 text-xs">{pm.name}</div>
                     </td>
-                    <td className="py-1.5 px-3">
-                      <span
-                        className={`px-2 py-0.25 rounded-full text-[9px] font-bold border uppercase ${
-                          pm.type === 'primary'
-                            ? 'bg-purple-50 border-purple-200 text-purple-700'
-                            : pm.type === 'secondary'
-                            ? 'bg-amber-50 border-amber-200 text-amber-800'
-                            : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                        }`}
-                      >
-                        {pm.type === 'primary'
-                          ? 'Primer'
-                          : pm.type === 'secondary'
-                          ? 'Sekunder'
-                          : 'Tersier'}
-                      </span>
-                    </td>
-                    <td className="py-1.5 px-3 font-mono text-[11px] font-semibold text-slate-700">
-                      {pm.type === 'primary' && pm.unitCapacityGrams ? `${pm.unitCapacityGrams} g/mL` : '-'}
-                    </td>
-                    <td className="py-1.5 px-3 font-bold text-purple-900">
-                      <span className="bg-purple-50 border border-purple-200 px-1.5 py-0.25 rounded text-[10px]">
-                        {pm.unit || 'Pcs'}
-                      </span>
-                    </td>
-                    <td className="py-1.5 px-3 font-medium text-slate-800 text-xs">
-                      {pm.supplier || pm.manufacturer || <span className="text-slate-400 italic">-</span>}
-                    </td>
-                    <td className="py-1.5 px-3 text-slate-600 text-[11px]">
-                      {pm.storageConditions || DEFAULT_STORAGE_CONDITIONS}
-                    </td>
                     <td className="py-1.5 px-3 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {/* Tombol Lihat Detail */}
                         <button
                           onClick={() => handleOpenDetailPM(pm)}
                           className="p-1 rounded bg-slate-50 border border-slate-200 hover:bg-purple-50 hover:border-purple-200 hover:text-purple-700 text-slate-600 transition-colors cursor-pointer"
@@ -908,7 +870,6 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
                           <Eye className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Tombol Edit & Hapus */}
                         {canWrite && (
                           <>
                             <button
@@ -1839,6 +1800,20 @@ export const RndPackagingTab: React.FC<RndPackagingTabProps> = ({
 
             {/* Actions */}
             <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2 shrink-0">
+              {selectedPMForDetails.type === 'primary' && (
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white transition-all cursor-pointer shadow-2xs"
+                >
+                  Cetak Stiker QR
+                </button>
+              )}
+              <div className="hidden print:block">
+                {selectedPMForDetails.type === 'primary' && (
+                  <QrSticker grn="-" code={selectedPMForDetails.code} name={selectedPMForDetails.name} />
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => setSelectedPMForDetails(null)}

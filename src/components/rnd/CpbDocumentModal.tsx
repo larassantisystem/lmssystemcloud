@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { DynamicProcessStep } from './TechnicalNotesModal';
 import { useEscapeKey } from '../../core/utils/useEscapeKey';
+import { QrSticker } from './QrSticker';
 
 interface CpbDocumentModalProps {
   isOpen: boolean;
@@ -50,6 +51,7 @@ export const CpbDocumentModal: React.FC<CpbDocumentModalProps> = ({
   const [revision, setRevision] = useState<string>(() => {
     return formulation.revision || '0';
   });
+  const [grnNumber, setGrnNumber] = useState<string>(''); // Added GRN State
   const [batchNumber, setBatchNumber] = useState<string>('036JN24');
   const [batchSizeKg, setBatchSizeKg] = useState<number>(() => formulation.bulkQuantityKg || 252);
   const [drafterName, setDrafterName] = useState<string>('Putri');
@@ -210,6 +212,15 @@ export const CpbDocumentModal: React.FC<CpbDocumentModalProps> = ({
                   type="text"
                   value={docNumber}
                   onChange={(e) => setDocNumber(e.target.value)}
+                  className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs font-bold text-slate-800"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">No. GRN</label>
+                <input
+                  type="text"
+                  value={grnNumber}
+                  onChange={(e) => setGrnNumber(e.target.value)}
                   className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs font-bold text-slate-800"
                 />
               </div>
@@ -631,6 +642,21 @@ export const CpbDocumentModal: React.FC<CpbDocumentModalProps> = ({
             <span>Format CPB ini 100% kompatibel dengan regulasi BPOM dan sistem pencatatan batch CPKB.</span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                // In a real scenario, this would open a specific sticker printing dialog
+                alert('Silakan pilih printer label stiker pada dialog cetak berikut.');
+                window.print();
+              }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all cursor-pointer"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Cetak Stiker QR</span>
+            </button>
+            <div className="hidden print:block">
+              <QrSticker grn={grnNumber} code={product?.code || formulation.productCode || 'PJ0475'} name={product?.name || formulation.productName || formulation.name} />
+            </div>
             <button
               type="button"
               onClick={onClose}

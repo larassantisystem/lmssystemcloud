@@ -18,7 +18,7 @@ import { supabase, isSupabaseConfigured } from '../../core/auth/supabaseClient';
 // In-memory runtime cache untuk efisiensi EGRESS Supabase (BUKAN local storage)
 let inMemoryMovementLedger: StockMovementLedger[] = [];
 let lastMovementLedgerFetchTime = 0;
-const MOVEMENT_CACHE_TTL_MS = 30 * 1000; // 30 detik cache di RAM
+const MOVEMENT_CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM
 
 export const stockService = {
   invalidateStockCache: () => {
