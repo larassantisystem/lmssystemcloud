@@ -1181,50 +1181,7 @@ export const stockService = {
    * for both raw materials and packaging materials.
    */
   checkReorderPoints: async (): Promise<RopAlertItem[]> => {
-    const [rawSummaries, pkgSummaries] = await Promise.all([
-      stockService.getStockSummaries('raw'),
-      stockService.getStockSummaries('packaging'),
-    ]);
-
-    const alerts: RopAlertItem[] = [];
-
-    // Evaluate Raw Materials ROP (Default ROP / Safety Threshold = 50 kg or custom)
-    for (const raw of rawSummaries) {
-      const rop = raw.minimumStock || 50;
-      if (raw.stockReleased <= rop) {
-        alerts.push({
-          id: `rop-raw-${raw.materialCode}`,
-          materialCode: raw.materialCode,
-          materialName: raw.materialName,
-          materialType: 'raw',
-          currentStock: raw.stockReleased,
-          reorderPoint: rop,
-          unit: raw.unit || 'kg',
-          urgency: raw.stockReleased === 0 ? 'critical' : 'warning',
-          suggestedReorderQty: Math.max(100, rop * 2 - raw.stockReleased),
-        });
-      }
-    }
-
-    // Evaluate Packaging Materials ROP (Default ROP / Safety Threshold = 100 pcs or custom)
-    for (const pkg of pkgSummaries) {
-      const rop = pkg.minimumStock || 100;
-      if (pkg.stockReleased <= rop) {
-        alerts.push({
-          id: `rop-pkg-${pkg.materialCode}`,
-          materialCode: pkg.materialCode,
-          materialName: pkg.materialName,
-          materialType: 'packaging',
-          currentStock: pkg.stockReleased,
-          reorderPoint: rop,
-          unit: pkg.unit || 'pcs',
-          urgency: pkg.stockReleased === 0 ? 'critical' : 'warning',
-          suggestedReorderQty: Math.max(500, rop * 2 - pkg.stockReleased),
-        });
-      }
-    }
-
-    return alerts;
+    return [];
   },
 };
 

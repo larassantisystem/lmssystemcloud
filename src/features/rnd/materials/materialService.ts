@@ -328,7 +328,7 @@ export const materialService = {
           const to = from + pageSize - 1;
           const { data, error } = await supabase
             .from('raw_materials')
-            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions')
+            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions, qc_parameters')
             .order('code', { ascending: true })
             .range(from, to);
 
@@ -366,7 +366,7 @@ export const materialService = {
               sdsFileName: undefined,
               approvedSubstitutes: [],
               manufacturer: m.manufacturer || '',
-              qcParameters: [],
+              qcParameters: parseJsonArray(m.qc_parameters, []),
               supplierLeadTimeDays: 14,
               reorderPoint: 50,
               lastModifiedBy: m.last_modified_by,

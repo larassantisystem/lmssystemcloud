@@ -606,6 +606,25 @@ export const warehouseService = {
     return inMemoryGrnRecords;
   },
 
+  getGrnListSummary: async (limit = 2000): Promise<GrnRecord[]> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('warehouse_grn')
+          .select('id, grn_number, material_type, material_code, material_name, received_date, quantity_received, unit, qc_status, created_at')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (!error && data) {
+          return data.map(mapDbRowToGrnRecord);
+        }
+      } catch (err) {
+        console.warn('[warehouseService] GRN summary fetch error:', err);
+      }
+    }
+    return (await warehouseService.getGrnRecords()).slice(0, limit);
+  },
+
   getGrnStatsServer: async (): Promise<GrnStats | null> => {
     try {
       const allRecords = await warehouseService.getGrnRecords(false, 'all');
@@ -626,6 +645,26 @@ export const warehouseService = {
     } catch {
       return { unreleasedCount: 0, releasedCount: 0 };
     }
+  },
+
+  getGrnRecordById: async (id: string): Promise<GrnRecord | null> => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('warehouse_grn')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          return mapDbRowToGrnRecord(data);
+        }
+      } catch (err) {
+        console.warn('[warehouseService] Failed to fetch GRN detail:', err);
+      }
+    }
+    const all = await warehouseService.getGrnRecords();
+    return all.find(r => r.id === id) || null;
   },
 
   /**
@@ -657,7 +696,7 @@ export const warehouseService = {
       try {
         let query = supabase
           .from('warehouse_grn')
-          .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at');
+          .select('id, grn_number, material_type, material_code, material_name, received_date, quantity_received, unit, qc_status, created_at');
 
         if (materialType && materialType !== 'all') {
           query = query.eq('material_type', materialType);
@@ -677,7 +716,7 @@ export const warehouseService = {
 
         if (search && search.trim()) {
           const q = search.trim();
-          query = query.or(`grn_number.ilike.%${q}%,material_code.ilike.%${q}%,material_name.ilike.%${q}%,distributor.ilike.%${q}%,supplier_batch_number.ilike.%${q}%,batch_number.ilike.%${q}%,internal_lot_number.ilike.%${q}%`);
+          query = query.or(`grn_number.ilike.%${q}%,material_code.ilike.%${q}%,material_name.ilike.%${q}%`);
         }
 
         const { data, error } = await query

@@ -341,7 +341,7 @@ export const packagingService = {
           const to = from + pageSize - 1;
           const { data, error } = await supabase
             .from('packaging_materials')
-            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions')
+            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions, qc_parameters')
             .order('code', { ascending: true })
             .range(from, to);
 
@@ -370,7 +370,7 @@ export const packagingService = {
             manufacturer: p.manufacturer || p.supplier || '',
             storageLocation: p.storage_location || '',
             storageConditions: p.storage_conditions || p.storageConditions || '',
-            qcParameters: [],
+            qcParameters: parseJsonArray(p.qc_parameters, []),
             reorderPoint: p.reorder_point ?? 100,
             lastModifiedBy: p.last_modified_by,
             lastModifiedAt: p.last_modified_at,
