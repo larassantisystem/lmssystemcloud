@@ -150,6 +150,9 @@ export const GrnTable: React.FC<GrnTableProps> = ({
   const filteredRecords = useMemo(() => {
     return records
       .filter((rec) => {
+        // Hotfix: Exclude records missing essential fields (likely corrupted/ghost data)
+        if (!rec.grnNumber || !rec.receivedDate) return false;
+
         if (rec.materialType !== activeCategory) return false;
 
         if (statusFilter !== 'ALL') {
@@ -289,7 +292,19 @@ export const GrnTable: React.FC<GrnTableProps> = ({
     <div className="space-y-4">
       {/* Category Tabs: Pisahkan Tabel Kedatangan Bahan Baku dan Bahan Kemas */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <button
+          className="text-[9px] text-rose-500 hover:text-rose-700"
+          onClick={async () => {
+             const all = await warehouseService.getGrnRecords();
+             const record = all.find(r => r.grnNumber === 'GRN-BB-261009-03');
+             console.log('DEBUG: GRN-BB-261009-03 record:', record);
+             alert(JSON.stringify(record, null, 2));
+          }}
+        >
+          DEBUG: Check GRN-BB-261009-03
+        </button>
         <div className="flex items-center gap-2">
+
           <button
             type="button"
             onClick={() => {

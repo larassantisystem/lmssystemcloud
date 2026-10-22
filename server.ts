@@ -159,6 +159,126 @@ if (fs.existsSync(schemaPath)) {
       db.exec("UPDATE warehouse_grn SET grn_number = 'GRN-' || upper(substr(hex(randomblob(4)), 1, 8)) WHERE (grn_number IS NULL OR grn_number = '');");
     } catch (e) {}
 
+    // Seed initial warehouse GRN records including requested GRNs if empty
+    try {
+      const checkGrn = db.prepare('SELECT COUNT(*) as count FROM warehouse_grn').get() as any;
+      if (!checkGrn || checkGrn.count === 0) {
+        console.log('[Cloudflare D1 Engine] Seeding initial warehouse GRN records...');
+        const seedGrns = [
+          {
+            id: 'grn-261009-05',
+            grn_number: 'GRN-BB-261009-05',
+            material_type: 'raw',
+            material_code: 'RM-GLY-01',
+            material_name: 'Glycerin / Gliserin (Vegetable Grade)',
+            manufacturer: 'Dow Chemical / PT. Kimia Farma',
+            distributor: 'PT. Multi Kimia Raya',
+            delivery_note_number: 'SJ-MKR-2026-905',
+            purchase_order_number: 'PO-2026-1009-01',
+            po_number: 'PO-2026-1009-01',
+            supplier_batch_number: 'GLY20261001',
+            batch_number: 'GLY20261001',
+            internal_lot_number: 'LBB2610001',
+            received_date: '2026-10-09',
+            expiration_date: '2028-10-09',
+            quantity_received: 250.0,
+            current_quantity: 250.0,
+            unit: 'kg',
+            container_count: 5,
+            container_type: 'Drum',
+            storage_location: 'Gudang Karantina',
+            qc_status: 'QUARANTINE',
+            received_by: 'Heni (Staf Gudang)',
+            notes: 'Penerimaan bahan baku baru gel, segel drum utuh.'
+          },
+          {
+            id: 'grn-261009-02',
+            grn_number: 'GRN-BB-261009-02',
+            material_type: 'raw',
+            material_code: 'RM-NIA-02',
+            material_name: 'Niacinamide (Vitamin B3 USP)',
+            manufacturer: 'DSM Nutritional Products',
+            distributor: 'PT. Indrasari Sumber Cemerlang',
+            delivery_note_number: 'SJ-ISC-2026-022',
+            purchase_order_number: 'PO-2026-1009-02',
+            po_number: 'PO-2026-1009-02',
+            supplier_batch_number: 'NIA202699',
+            batch_number: 'NIA202699',
+            internal_lot_number: 'LBB2610002',
+            received_date: '2026-10-09',
+            expiration_date: '2028-09-15',
+            quantity_received: 100.0,
+            current_quantity: 100.0,
+            unit: 'kg',
+            container_count: 2,
+            container_type: 'Fiber Drum',
+            storage_location: 'Gudang Karantina',
+            qc_status: 'QUARANTINE',
+            received_by: 'Heni (Staf Gudang)',
+            notes: 'CoA lengkap, menunggu uji sampling QC Lab.'
+          },
+          {
+            id: 'grn-261006-05',
+            grn_number: 'GRN-BB-261006-05',
+            material_type: 'raw',
+            material_code: 'RM-HYA-03',
+            material_name: 'Sodium Hyaluronate (High Molecular Weight)',
+            manufacturer: 'Bloomage Biotech',
+            distributor: 'PT. Era Cosmindo',
+            delivery_note_number: 'SJ-EC-2026-605',
+            purchase_order_number: 'PO-2026-1006-03',
+            po_number: 'PO-2026-1006-03',
+            supplier_batch_number: 'SH20261006',
+            batch_number: 'SH20261006',
+            internal_lot_number: 'LBB2610003',
+            received_date: '2026-10-06',
+            expiration_date: '2029-01-01',
+            quantity_received: 50.0,
+            current_quantity: 50.0,
+            unit: 'kg',
+            container_count: 1,
+            container_type: 'Jerigen Plastik',
+            storage_location: 'Gudang Karantina',
+            qc_status: 'REVERTED_TO_WAREHOUSE',
+            revert_reason: 'Dokumen CoA dari supplier tidak mencantumkan parameter loss on drying (LOD). Dikembalikan ke gudang untuk konfirmasi.',
+            reverted_by: 'Ayu (Staf QC)',
+            reverted_at: '2026-10-07 10:30:00',
+            received_by: 'Heni (Staf Gudang)',
+            notes: 'REVERTED_TO_WAREHOUSE: CoA kurang lengkap parameter LOD.'
+          }
+        ];
+
+        const insertGrnStmt = db.prepare(`
+          INSERT INTO warehouse_grn (
+            id, grn_number, material_type, material_code, material_name,
+            manufacturer, distributor, delivery_note_number, purchase_order_number, po_number,
+            supplier_batch_number, batch_number, internal_lot_number, received_date,
+            expiration_date, quantity_received, current_quantity, unit, container_count,
+            container_type, storage_location, qc_status, received_by, notes,
+            revert_reason, reverted_by, reverted_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const g of seedGrns) {
+          try {
+            insertGrnStmt.run(
+              g.id, g.grn_number, g.material_type, g.material_code, g.material_name,
+              g.manufacturer, g.distributor, g.delivery_note_number, g.purchase_order_number, g.po_number,
+              g.supplier_batch_number, g.batch_number, g.internal_lot_number, g.received_date,
+              g.expiration_date, g.quantity_received, g.current_quantity, g.unit, g.container_count,
+              g.container_type, g.storage_location, g.qc_status, g.received_by, g.notes,
+              g.revert_reason || null, g.reverted_by || null, g.reverted_at || null
+            );
+          } catch (e) {
+            console.warn('[Cloudflare D1 Engine] Failed to seed GRN:', g.grn_number, e);
+          }
+        }
+        console.log(`[Cloudflare D1 Engine] Successfully seeded ${seedGrns.length} warehouse GRN records into D1.`);
+      }
+    } catch (e) {
+      console.warn('[Cloudflare D1 Engine] GRN seeding error:', e);
+    }
+
     // Seed initial users into Cloudflare D1 if empty
     const checkProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get() as any;
     if (!checkProfiles || checkProfiles.count === 0) {
@@ -446,6 +566,33 @@ const tableDefinitions: Record<string, { col: string; type: string }[]> = {
     { col: 'password', type: 'TEXT' },
     { col: 'password_hash', type: 'TEXT' },
     { col: 'permissions_json', type: "TEXT DEFAULT '[]'" },
+  ],
+  ipc_bulk_batches: [
+    { col: 'batch_no', type: 'TEXT' },
+    { col: 'product_code', type: 'TEXT' },
+    { col: 'product_name', type: 'TEXT' },
+    { col: 'mixing_qty_kg', type: 'REAL DEFAULT 100' },
+    { col: 'mixing_date', type: 'TEXT' },
+    { col: 'ph', type: 'REAL DEFAULT 6.00' },
+    { col: 'viscosity', type: 'REAL DEFAULT 4000' },
+    { col: 'appearance', type: 'TEXT' },
+    { col: 'gravity', type: 'REAL DEFAULT 1.000' },
+    { col: 'status', type: "TEXT DEFAULT 'TESTING'" },
+    { col: 'analyst', type: 'TEXT' },
+    { col: 'origin', type: 'TEXT' },
+    { col: 'notes', type: 'TEXT' },
+  ],
+  ipc_rework_batches: [
+    { col: 'original_batch_no', type: 'TEXT' },
+    { col: 'rework_batch_no', type: 'TEXT' },
+    { col: 'product_name', type: 'TEXT' },
+    { col: 'rework_reason', type: 'TEXT' },
+    { col: 'rework_date', type: 'TEXT' },
+    { col: 'ph_test', type: 'REAL' },
+    { col: 'viscosity_test', type: 'REAL' },
+    { col: 'microbiology', type: "TEXT DEFAULT 'PENDING'" },
+    { col: 'status', type: "TEXT DEFAULT 'TESTING'" },
+    { col: 'authorized_by', type: 'TEXT' },
   ],
 };
 
@@ -2001,7 +2148,7 @@ app.get('/api/dashboard/counts', async (_req: Request, res: Response) => {
 // WAREHOUSE GRN ENDPOINTS
 app.get('/api/grn', async (req: Request, res: Response) => {
   try {
-    const { page = '1', pageSize = '50', materialType, status, search, id } = req.query;
+    const { page = '1', pageSize = '50', materialType, status, search, id, releaseGroup } = req.query;
 
     if (id) {
       const { results } = await executeD1Query(
@@ -2023,20 +2170,26 @@ app.get('/api/grn', async (req: Request, res: Response) => {
     }
     if (status && status !== 'ALL') {
       if (status === 'PASSED' || status === 'RELEASED') {
-        where.push("qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION')");
+        where.push("qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION')");
       } else if (status === 'REVERTED_TO_WAREHOUSE') {
-        where.push("(qc_status = 'REVERTED_TO_WAREHOUSE' OR notes LIKE '%REVERTED_TO_WAREHOUSE%')");
+        where.push("qc_status NOT IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION') AND (qc_status = 'REVERTED_TO_WAREHOUSE' OR notes LIKE '%REVERTED_TO_WAREHOUSE%' OR (revert_reason IS NOT NULL AND revert_reason != ''))");
       } else if (status === 'QUARANTINE') {
-        where.push("qc_status = 'QUARANTINE' AND (notes NOT LIKE '%REVERTED_TO_WAREHOUSE%' OR notes IS NULL)");
+        where.push("qc_status = 'QUARANTINE' AND (notes NOT LIKE '%REVERTED_TO_WAREHOUSE%' OR notes IS NULL) AND (revert_reason IS NULL OR revert_reason = '')");
       } else {
         where.push('qc_status = ?');
         params.push(status);
       }
+    } else if (releaseGroup && releaseGroup !== 'all') {
+      if (releaseGroup === 'unreleased') {
+        where.push("(qc_status NOT IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION'))");
+      } else if (releaseGroup === 'released') {
+        where.push("(qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION'))");
+      }
     }
     if (search) {
-      where.push('(LOWER(grn_number) LIKE ? OR LOWER(material_code) LIKE ? OR LOWER(material_name) LIKE ? OR LOWER(distributor) LIKE ? OR LOWER(batch_number) LIKE ? OR LOWER(internal_lot_number) LIKE ?)');
+      where.push('(LOWER(grn_number) LIKE ? OR LOWER(material_code) LIKE ? OR LOWER(material_name) LIKE ? OR LOWER(distributor) LIKE ? OR LOWER(manufacturer) LIKE ? OR LOWER(batch_number) LIKE ? OR LOWER(supplier_batch_number) LIKE ? OR LOWER(internal_lot_number) LIKE ?)');
       const s = `%${(search as string).trim().toLowerCase()}%`;
-      params.push(s, s, s, s, s, s);
+      params.push(s, s, s, s, s, s, s, s);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';

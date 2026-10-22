@@ -534,7 +534,7 @@ export const warehouseService = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-              sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
+              sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, revert_reason, reverted_by, reverted_at, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
               params: [] 
             })
           });
@@ -628,7 +628,22 @@ export const warehouseService = {
   getGrnStatsServer: async (): Promise<GrnStats | null> => {
     try {
       const allRecords = await warehouseService.getGrnRecords(false, 'all');
-      return warehouseService.calculateStats(allRecords);
+      const stats = warehouseService.calculateStats(allRecords);
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          const rawQc = localStorage.getItem('lsm_qc_reports_v2');
+          if (rawQc) {
+            const reports = JSON.parse(rawQc);
+            if (Array.isArray(reports)) {
+              const passedCount = reports.filter((r: any) => r.status === 'PASSED' || r.status === 'PASSED_WITH_DEVIATION' || r.qmDecision === 'RELEASE' || r.qmDecision === 'RELEASE_BY_DEVIATION').length;
+              if (passedCount > stats.passedQC) {
+                stats.passedQC = passedCount;
+              }
+            }
+          }
+        }
+      } catch {}
+      return stats;
     } catch (err) {
       console.warn('[warehouseService] getGrnStatsServer error:', err);
       return null;
@@ -678,93 +693,69 @@ export const warehouseService = {
       pageSize = 25,
       materialType = 'all',
       status = 'ALL',
+      releaseGroup = 'all',
       search = '',
       forceRefresh = false,
     } = params;
 
-    const cacheKey = `${page}_${pageSize}_${materialType}_${status}_${search.trim().toLowerCase()}`;
+    const cacheKey = `${page}_${pageSize}_${materialType}_${status}_${releaseGroup}_${search.trim().toLowerCase()}`;
     const cached = paginatedGrnCache.get(cacheKey);
     if (!forceRefresh && cached && (Date.now() - cached.timestamp < PAGINATED_CACHE_TTL_MS)) {
       return cached.data;
     }
 
-    const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
-    const queryTo = from + pageSize; // fetch pageSize + 1 items to check if there is a next page
+    // 1. Prioritaskan endpoint server-side /api/grn (D1 dengan caching, full column projection & releaseGroup)
+    try {
+      const qParams = new URLSearchParams({
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      if (materialType && materialType !== 'all') qParams.set('materialType', materialType);
+      if (status && status !== 'ALL') qParams.set('status', status);
+      if (releaseGroup && releaseGroup !== 'all') qParams.set('releaseGroup', releaseGroup);
+      if (search && search.trim()) qParams.set('search', search.trim());
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        let query = supabase
-          .from('warehouse_grn')
-          .select('id, grn_number, material_type, material_code, material_name, received_date, quantity_received, unit, qc_status, created_at');
+      const res = await fetch(`/api/grn?${qParams.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const records: GrnRecord[] = (data.records || [])
+          .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
+          .map(mapDbRowToGrnRecord);
 
-        if (materialType && materialType !== 'all') {
-          query = query.eq('material_type', materialType);
-        }
+        const result: GrnPaginatedResponse = {
+          records,
+          totalItems: Number(data.totalItems) || records.length,
+          totalPages: Number(data.totalPages) || 1,
+          page,
+          pageSize,
+        };
 
-        if (status && status !== 'ALL') {
-          if (status === 'PASSED' || status === 'RELEASED') {
-            query = query.in('qc_status', ['PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION']);
-          } else if (status === 'REVERTED_TO_WAREHOUSE') {
-            query = query.or('qc_status.eq.REVERTED_TO_WAREHOUSE,notes.ilike.%REVERTED_TO_WAREHOUSE%');
-          } else if (status === 'QUARANTINE') {
-            query = query.eq('qc_status', 'QUARANTINE').not('notes', 'ilike', '%REVERTED_TO_WAREHOUSE%');
-          } else {
-            query = query.eq('qc_status', status);
-          }
-        }
-
-        if (search && search.trim()) {
-          const q = search.trim();
-          query = query.or(`grn_number.ilike.%${q}%,material_code.ilike.%${q}%,material_name.ilike.%${q}%`);
-        }
-
-        const { data, error } = await query
-          .order('created_at', { ascending: false })
-          .range(from, queryTo);
-
-        if (!error && data) {
-          const hasMore = data.length > pageSize;
-          const rawItems = hasMore ? data.slice(0, pageSize) : data;
-
-          let records: GrnRecord[] = rawItems
-            .filter((d: any) => d.grn_number !== 'SYSTEM-STOCK-LEDGER')
-            .map(mapDbRowToGrnRecord);
-
-          if (status === 'REVERTED_TO_WAREHOUSE') {
-            records = records.filter((r) => r.qcStatus === 'REVERTED_TO_WAREHOUSE');
-          } else if (status === 'QUARANTINE') {
-            records = records.filter((r) => r.qcStatus === 'QUARANTINE');
-          }
-
-          const totalItems = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + records.length;
-          const totalPages = Math.ceil(totalItems / pageSize) || 1;
-          const result: GrnPaginatedResponse = {
-            records,
-            totalItems,
-            totalPages,
-            page,
-            pageSize,
-          };
-
-          paginatedGrnCache.set(cacheKey, { timestamp: Date.now(), data: result });
-          return result;
-        }
-      } catch (err) {
-        console.warn('[warehouseService] Paginated fetch notice:', err);
+        paginatedGrnCache.set(cacheKey, { timestamp: Date.now(), data: result });
+        return result;
       }
+    } catch (apiErr) {
+      console.warn('[warehouseService] /api/grn fetch notice, switching to fallback:', apiErr);
     }
 
-    // Fallback dari memori cache
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    // 2. Fallback dari memori cache
     let list = inMemoryGrnRecords.length > 0 ? inMemoryGrnRecords : await warehouseService.getGrnRecords();
     if (materialType && materialType !== 'all') {
       list = list.filter((r) => r.materialType === materialType);
     }
     if (status && status !== 'ALL') {
       if (status === 'PASSED' || status === 'RELEASED') {
-        list = list.filter((r) => r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION');
+        list = list.filter((r) => r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION' || r.qcStatus === 'RELEASE_DEVIATION');
       } else {
         list = list.filter((r) => r.qcStatus === status);
+      }
+    } else if (releaseGroup && releaseGroup !== 'all') {
+      if (releaseGroup === 'unreleased') {
+        list = list.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus));
+      } else if (releaseGroup === 'released') {
+        list = list.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus));
       }
     }
     if (search && search.trim()) {
@@ -774,7 +765,9 @@ export const warehouseService = {
         r.materialCode.toLowerCase().includes(q) ||
         r.materialName.toLowerCase().includes(q) ||
         r.distributor.toLowerCase().includes(q) ||
-        (r.batchNumber && r.batchNumber.toLowerCase().includes(q))
+        r.manufacturer.toLowerCase().includes(q) ||
+        (r.batchNumber && r.batchNumber.toLowerCase().includes(q)) ||
+        (r.internalLotNumber && r.internalLotNumber.toLowerCase().includes(q))
       );
     }
     const totalItems = list.length;
@@ -788,6 +781,8 @@ export const warehouseService = {
       page,
       pageSize,
     };
+
+    paginatedGrnCache.set(cacheKey, { timestamp: Date.now(), data: fallbackResult });
     return fallbackResult;
   },
 
@@ -1092,8 +1087,8 @@ export const warehouseService = {
       inQuarantine: records.filter((r) => r.qcStatus === 'QUARANTINE').length,
       underTesting: records.filter((r) => r.qcStatus === 'QUALITY_CONTROL_PROCESS').length,
       awaitingAuth: records.filter((r) => r.qcStatus === 'AWAITING_QM_AUTHORIZATION').length,
-      passedQC: records.filter((r) => r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION').length,
-      rejectedQC: records.filter((r) => r.qcStatus === 'REJECTED').length,
+      passedQC: records.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus) || r.qcStatus === 'PASSED' || r.qcStatus === 'RELEASED' || r.qcStatus === 'PASSED_WITH_DEVIATION' || r.qcStatus === 'RELEASE_DEVIATION').length,
+      rejectedQC: records.filter((r) => REJECTED_QC_STATUSES.includes(r.qcStatus) || r.qcStatus === 'REJECTED').length,
       rawMaterialsCount: records.filter((r) => r.materialType === 'raw').length,
       packagingCount: records.filter((r) => r.materialType === 'packaging').length,
     };

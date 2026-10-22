@@ -329,7 +329,7 @@ export const stockService = {
         materialLots.forEach((lot) => {
           if (lot.qcStatus === 'RELEASED' || lot.qcStatus === 'RELEASE_DEVIATION' || (lot.qcStatus as any) === 'PASSED') {
             stockReleased += lot.currentQuantity;
-          } else if (lot.qcStatus === 'QUARANTINE' || (lot.qcStatus as any) === 'TESTING' || (lot.qcStatus as any) === 'AWAITING_APPROVAL') {
+          } else if (lot.qcStatus === 'QUARANTINE' || lot.qcStatus === 'REVERTED_TO_WAREHOUSE' || (lot.qcStatus as any) === 'TESTING' || (lot.qcStatus as any) === 'AWAITING_APPROVAL') {
             stockQuarantine += lot.currentQuantity;
           } else if (lot.qcStatus === 'REJECTED') {
             stockRejected += lot.currentQuantity;

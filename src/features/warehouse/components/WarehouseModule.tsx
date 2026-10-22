@@ -65,13 +65,21 @@ export const WarehouseModule: React.FC<WarehouseModuleProps> = ({
     if (activeSubTab) setCurrentTab(activeSubTab);
   }, [activeSubTab]);
 
+  const [allGrnRecordsForStats, setAllGrnRecordsForStats] = useState<GrnRecord[]>([]);
+
   const loadData = async () => {
-    // 1. Fetch exact aggregate stats in 1 lightweight query (< 10 rows read)
+    // 1. Fetch exact aggregate stats and all records for accurate stats
     warehouseService.getGrnStatsServer()
       .then((st) => {
         if (st) setServerStats(st);
       })
       .catch((err) => console.warn('[WarehouseModule] getGrnStatsServer fallback:', err));
+
+    warehouseService.getGrnRecords(false, 'all')
+      .then((all) => {
+        if (all && all.length > 0) setAllGrnRecordsForStats(all);
+      })
+      .catch(() => {});
 
     // 2. Prioritize unreleased GRN records so table appears instantly and rows read are minimal
     warehouseService.getGrnRecords(true, 'unreleased')
@@ -110,7 +118,7 @@ export const WarehouseModule: React.FC<WarehouseModuleProps> = ({
     loadData();
   }, []);
 
-  const stats: GrnStats = serverStats || warehouseService.calculateStats(grnRecords);
+  const stats: GrnStats = serverStats || warehouseService.calculateStats(allGrnRecordsForStats.length > 0 ? allGrnRecordsForStats : grnRecords);
 
   const handleSaveGrn = async (recordData: Omit<GrnRecord, 'id' | 'createdAt'> & { grnNumber?: string }) => {
     const saved = await warehouseService.saveGrnRecord(recordData);
