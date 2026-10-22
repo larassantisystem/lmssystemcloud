@@ -11,7 +11,7 @@ const WAREHOUSE_GRN_STORAGE_KEY = 'lsm_warehouse_grn_v1';
 
 const defaultGrnRecords: GrnRecord[] = [];
 
-export const UNRELEASED_QC_STATUSES = ['QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION', 'REVERTED_TO_WAREHOUSE'];
+export const UNRELEASED_QC_STATUSES = ['QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION', 'REVERTED_TO_WAREHOUSE', 'DIKEMBALIKAN KE GUDANG'];
 export const RELEASED_QC_STATUSES = ['PASSED', 'PASSED_WITH_DEVIATION', 'RELEASED', 'RELEASE_DEVIATION'];
 export const REJECTED_QC_STATUSES = ['REJECTED'];
 
@@ -268,7 +268,11 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
   let resolvedQcStatus = 'QUARANTINE';
   if (isOpnameGrn) {
     resolvedQcStatus = 'RELEASED';
-  } else if (payloadStatus === 'REVERTED_TO_WAREHOUSE' || Boolean(d.revert_reason || d.revertReason || (d.notes && d.notes.includes('REVERTED_TO_WAREHOUSE')))) {
+  } else if (
+    payloadStatus === 'REVERTED_TO_WAREHOUSE' || 
+    rawDbStatus === 'DIKEMBALIKAN KE GUDANG' ||
+    Boolean(d.revert_reason || d.revertReason || (d.notes && d.notes.includes('REVERTED_TO_WAREHOUSE')))
+  ) {
     resolvedQcStatus = 'REVERTED_TO_WAREHOUSE';
   } else if (payloadStatus && payloadStatus !== 'QUARANTINE') {
     resolvedQcStatus = payloadStatus === 'PASSED' ? 'RELEASED' : payloadStatus;
@@ -279,6 +283,11 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
   } else {
     resolvedQcStatus = d.qc_status || d.qcStatus || 'QUARANTINE';
   }
+
+  if (d.grn_number === 'GRN-BB-261009-03') {
+     console.log('DEBUG: GRN-BB-261009-03 mapped status:', resolvedQcStatus, 'rawDbStatus:', rawDbStatus);
+  }
+
 
   let coaAtt = (d as any).coa_attachment || (d as any).coaAttachment || (qcPayload as any)?.coaAttachment || '';
   let driveFileId = (d as any).coa_drive_file_id || (d as any).coaDriveFileId || (qcPayload as any)?.coaDriveFileId;
