@@ -150,23 +150,27 @@ export const GrnTable: React.FC<GrnTableProps> = ({
   const filteredRecords = useMemo(() => {
     return records
       .filter((rec) => {
-        // Hotfix: Exclude records missing essential fields (likely corrupted/ghost data)
-        if (!rec.grnNumber || !rec.receivedDate) return false;
+        // Exclude corrupted records missing grnNumber
+        if (!rec.grnNumber) return false;
 
-        if (rec.materialType !== activeCategory) return false;
+        const normalizedType = String(rec.materialType || '').toLowerCase().trim();
+        const isPackaging = normalizedType === 'packaging' || normalizedType === 'pm' || normalizedType === 'bk' || normalizedType.includes('kemas');
+        const isMatchCategory = activeCategory === 'packaging' ? isPackaging : !isPackaging;
+        if (!isMatchCategory) return false;
 
         if (statusFilter !== 'ALL') {
           if (statusFilter === 'PASSED' || statusFilter === 'RELEASED') {
             if (rec.qcStatus !== 'PASSED' && rec.qcStatus !== 'RELEASED' && rec.qcStatus !== 'PASSED_WITH_DEVIATION' && rec.qcStatus !== 'RELEASE_DEVIATION') {
               return false;
             }
+            if ((rec.qcStatus as string) === 'REVERTED_TO_WAREHOUSE') return false;
           } else if (rec.qcStatus !== statusFilter) {
             return false;
           }
         } else if (releaseGroupTab === 'unreleased') {
-          if (!UNRELEASED_QC_STATUSES.includes(rec.qcStatus)) return false;
+          if (!UNRELEASED_QC_STATUSES.includes(rec.qcStatus as string) && (rec.qcStatus as string) !== 'REVERTED_TO_WAREHOUSE') return false;
         } else if (releaseGroupTab === 'released') {
-          if (!RELEASED_QC_STATUSES.includes(rec.qcStatus)) return false;
+          if (!RELEASED_QC_STATUSES.includes(rec.qcStatus as string) || (rec.qcStatus as string) === 'REVERTED_TO_WAREHOUSE') return false;
         }
 
         if (!searchQuery.trim()) return true;
@@ -183,18 +187,30 @@ export const GrnTable: React.FC<GrnTableProps> = ({
         );
       })
       .sort((a, b) => {
-        const dateA = new Date(a.receivedDate).getTime();
-        const dateB = new Date(b.receivedDate).getTime();
+        const dateA = new Date(a.receivedDate || a.createdAt).getTime();
+        const dateB = new Date(b.receivedDate || b.createdAt).getTime();
         if (dateA !== dateB) return dateA - dateB;
         return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       });
   }, [records, activeCategory, releaseGroupTab, statusFilter, searchQuery]);
 
   // Server-Side pagination takes precedence, reducing egress to only 20 records per request
+  const indexOfFirstItem = (currentPage - 1) * itemsPerPage;
+  const indexOfLastItem = indexOfFirstItem + itemsPerPage;
+  const rawCurrentItems = serverPageData ? serverPageData.records : filteredRecords.slice(indexOfFirstItem, indexOfLastItem);
+  const currentItems = useMemo(() => {
+    return rawCurrentItems.filter((r) => {
+      if (releaseGroupTab === 'released') {
+        return (r.qcStatus as string) !== 'REVERTED_TO_WAREHOUSE' && RELEASED_QC_STATUSES.includes(r.qcStatus as string);
+      }
+      if (releaseGroupTab === 'unreleased') {
+        return UNRELEASED_QC_STATUSES.includes(r.qcStatus as string) || (r.qcStatus as string) === 'REVERTED_TO_WAREHOUSE';
+      }
+      return true;
+    });
+  }, [rawCurrentItems, releaseGroupTab]);
+
   const totalItems = serverPageData ? serverPageData.totalItems : filteredRecords.length;
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = serverPageData ? serverPageData.records : filteredRecords.slice(indexOfFirstItem, indexOfLastItem);
 
   const isAllCurrentSelected = currentItems.length > 0 && currentItems.every((item) => selectedRecordIds.includes(item.id));
 
@@ -292,17 +308,6 @@ export const GrnTable: React.FC<GrnTableProps> = ({
     <div className="space-y-4">
       {/* Category Tabs: Pisahkan Tabel Kedatangan Bahan Baku dan Bahan Kemas */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-        <button
-          className="text-[9px] text-rose-500 hover:text-rose-700"
-          onClick={async () => {
-             const all = await warehouseService.getGrnRecords();
-             const record = all.find(r => r.grnNumber === 'GRN-BB-261009-03');
-             console.log('DEBUG: GRN-BB-261009-03 record:', record);
-             alert(JSON.stringify(record, null, 2));
-          }}
-        >
-          DEBUG: Check GRN-BB-261009-03
-        </button>
         <div className="flex items-center gap-2">
 
           <button
@@ -834,7 +839,7 @@ export const GrnTable: React.FC<GrnTableProps> = ({
         </div>
 
         {/* Pagination Section */}
-        {filteredRecords.length > 0 && (
+        {totalItems > 0 && (
           <div className="px-4 pb-2">
             <Pagination
               currentPage={currentPage}

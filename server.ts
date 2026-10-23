@@ -2170,20 +2170,20 @@ app.get('/api/grn', async (req: Request, res: Response) => {
     }
     if (status && status !== 'ALL') {
       if (status === 'PASSED' || status === 'RELEASED') {
-        where.push("qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION')");
+        where.push("qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION') AND qc_status != 'REVERTED_TO_WAREHOUSE' AND qc_status != 'DIKEMBALIKAN KE GUDANG'");
       } else if (status === 'REVERTED_TO_WAREHOUSE') {
-        where.push("qc_status NOT IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION') AND (qc_status = 'REVERTED_TO_WAREHOUSE' OR notes LIKE '%REVERTED_TO_WAREHOUSE%' OR (revert_reason IS NOT NULL AND revert_reason != ''))");
+        where.push("(qc_status = 'REVERTED_TO_WAREHOUSE' OR qc_status = 'DIKEMBALIKAN KE GUDANG')");
       } else if (status === 'QUARANTINE') {
-        where.push("qc_status = 'QUARANTINE' AND (notes NOT LIKE '%REVERTED_TO_WAREHOUSE%' OR notes IS NULL) AND (revert_reason IS NULL OR revert_reason = '')");
+        where.push("qc_status = 'QUARANTINE'");
       } else {
         where.push('qc_status = ?');
         params.push(status);
       }
     } else if (releaseGroup && releaseGroup !== 'all') {
       if (releaseGroup === 'unreleased') {
-        where.push("(qc_status NOT IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION'))");
+        where.push("(qc_status NOT IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION') OR qc_status = 'REVERTED_TO_WAREHOUSE' OR qc_status = 'DIKEMBALIKAN KE GUDANG')");
       } else if (releaseGroup === 'released') {
-        where.push("(qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION'))");
+        where.push("qc_status IN ('PASSED', 'RELEASED', 'PASSED_WITH_DEVIATION', 'RELEASE_DEVIATION') AND qc_status != 'REVERTED_TO_WAREHOUSE' AND qc_status != 'DIKEMBALIKAN KE GUDANG'");
       }
     }
     if (search) {
@@ -2309,6 +2309,18 @@ app.patch('/api/grn', async (req: Request, res: Response) => {
       params
     );
     res.json({ success: true, id: targetId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete(['/api/grn', '/api/grn/:id'], async (req: Request, res: Response) => {
+  try {
+    const targetId = req.params.id || req.body?.id || req.query?.id;
+    if (!targetId) return res.status(400).json({ error: 'Missing GRN identifier for deletion' });
+
+    await executeD1Query('DELETE FROM warehouse_grn WHERE id = ? OR grn_number = ?', [targetId, targetId]);
+    res.json({ success: true, message: `GRN ${targetId} successfully removed.` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

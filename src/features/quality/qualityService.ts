@@ -1216,14 +1216,25 @@ export const qualityService = {
         if (opts.sampledBy !== undefined) target.sampledBy = opts.sampledBy;
         if (opts.samplingDateTime !== undefined) target.samplingDateTime = opts.samplingDateTime;
 
+        const isOfficialRelease = newStatus === 'PASSED' || newStatus === 'RELEASED' || newStatus === 'PASSED_WITH_DEVIATION' || newStatus === 'RELEASE_DEVIATION';
+        const finalRevertReason = isOfficialRelease ? undefined : (opts.revertReason !== undefined ? opts.revertReason : target.revertReason);
+        const finalRevertedBy = isOfficialRelease ? undefined : (opts.revertedBy !== undefined ? opts.revertedBy : target.revertedBy);
+        const finalRevertedAt = isOfficialRelease ? undefined : (opts.revertedAt !== undefined ? opts.revertedAt : target.revertedAt);
+
+        if (isOfficialRelease) {
+          target.revertReason = undefined;
+          target.revertedBy = undefined;
+          target.revertedAt = undefined;
+        }
+
         // Synchronize directly with Supabase via warehouseService
         await warehouseService.updateGrnRecord(target.id, {
           qcStatus: newStatus as any,
           notes: opts.notes || target.notes,
           qcPayload: target.qcPayload,
-          revertReason: opts.revertReason !== undefined ? opts.revertReason : target.revertReason,
-          revertedBy: opts.revertedBy !== undefined ? opts.revertedBy : target.revertedBy,
-          revertedAt: opts.revertedAt !== undefined ? opts.revertedAt : target.revertedAt,
+          revertReason: finalRevertReason,
+          revertedBy: finalRevertedBy,
+          revertedAt: finalRevertedAt,
           actualSampleSize: opts.actualSampleSize !== undefined ? opts.actualSampleSize : target.actualSampleSize,
           actualSampleUnit: opts.actualSampleUnit !== undefined ? opts.actualSampleUnit : target.actualSampleUnit,
           sampledContainers: target.sampledContainers,

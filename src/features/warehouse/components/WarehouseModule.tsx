@@ -75,22 +75,15 @@ export const WarehouseModule: React.FC<WarehouseModuleProps> = ({
       })
       .catch((err) => console.warn('[WarehouseModule] getGrnStatsServer fallback:', err));
 
+    // 1. Fetch exact aggregate stats and all records for accurate stats & full tab filtering
     warehouseService.getGrnRecords(false, 'all')
       .then((all) => {
-        if (all && all.length > 0) setAllGrnRecordsForStats(all);
-      })
-      .catch(() => {});
-
-    // 2. Prioritize unreleased GRN records so table appears instantly and rows read are minimal
-    warehouseService.getGrnRecords(true, 'unreleased')
-      .then((grns) => {
-        if (grns && grns.length > 0) {
-          setGrnRecords(grns);
+        if (all && all.length > 0) {
+          setAllGrnRecordsForStats(all);
+          setGrnRecords(all);
         }
       })
-      .catch((err) => {
-        console.warn('[WarehouseModule] GRN fetch fallback:', err);
-      })
+      .catch(() => {})
       .finally(() => {
         setIsLoadingGrn(false);
       });

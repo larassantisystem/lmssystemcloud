@@ -447,7 +447,11 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
 
     archiveTotal: archiveReports.length,
     archiveRaw: archiveReports.filter((r) => r.materialType === 'raw').length,
+    archiveRawPassed: archiveReports.filter((r) => r.materialType === 'raw' && (r.status === 'PASSED' || r.status === 'PASSED_WITH_DEVIATION')).length,
+    archiveRawRejected: archiveReports.filter((r) => r.materialType === 'raw' && r.status === 'REJECTED').length,
     archivePkg: archiveReports.filter((r) => r.materialType === 'packaging').length,
+    archivePkgPassed: archiveReports.filter((r) => r.materialType === 'packaging' && (r.status === 'PASSED' || r.status === 'PASSED_WITH_DEVIATION')).length,
+    archivePkgRejected: archiveReports.filter((r) => r.materialType === 'packaging' && r.status === 'REJECTED').length,
     passed: reports.filter((r) => r.status === 'PASSED' || r.status === 'PASSED_WITH_DEVIATION').length,
     rejected: reports.filter((r) => r.status === 'REJECTED').length,
   };
@@ -1625,7 +1629,9 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
                         : 'bg-slate-100 text-slate-700'
                     }`}
                   >
-                    {stats.archiveRaw} Selesai
+                    {stats.archiveRawRejected > 0
+                      ? `${stats.archiveRawPassed} Rilis / ${stats.archiveRawRejected} Ditolak (${stats.archiveRaw} Selesai)`
+                      : `${stats.archiveRaw} Selesai`}
                   </span>
                 </button>
 
@@ -1650,7 +1656,9 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
                         : 'bg-slate-100 text-slate-700'
                     }`}
                   >
-                    {stats.archivePkg} Selesai
+                    {stats.archivePkgRejected > 0
+                      ? `${stats.archivePkgPassed} Rilis / ${stats.archivePkgRejected} Ditolak (${stats.archivePkg} Selesai)`
+                      : `${stats.archivePkg} Selesai`}
                   </span>
                 </button>
               </div>

@@ -265,27 +265,70 @@ function mapDbRowToGrnRecord(d: any): GrnRecord {
   const rawDbStatus = String(d.qc_status || d.qcStatus || '').toUpperCase();
   const payloadStatus = qcPayload?.status ? String(qcPayload.status).toUpperCase() : '';
 
+  // Check matching QC report in localStorage if available
+  let localQcReportStatus = '';
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const rawQc = localStorage.getItem('lsm_qc_reports_v2');
+      if (rawQc) {
+        const parsed = JSON.parse(rawQc);
+        if (Array.isArray(parsed)) {
+          const matched = parsed.find((r: any) => 
+            r.grnId === d.id || 
+            r.grnNumber === (d.grn_number || d.grnNumber) ||
+            r.id === d.id ||
+            r.id === `qc-rep-${d.id}`
+          );
+          if (matched && matched.status) {
+            localQcReportStatus = String(matched.status).toUpperCase();
+          }
+        }
+      }
+    } catch {}
+  }
+
   let resolvedQcStatus = 'QUARANTINE';
   if (isOpnameGrn) {
     resolvedQcStatus = 'RELEASED';
   } else if (
+    rawDbStatus === 'PASSED' ||
+    rawDbStatus === 'RELEASED' ||
+    rawDbStatus === 'PASSED_WITH_DEVIATION' ||
+    rawDbStatus === 'RELEASE_DEVIATION' ||
+    payloadStatus === 'PASSED' ||
+    payloadStatus === 'RELEASED' ||
+    payloadStatus === 'PASSED_WITH_DEVIATION' ||
+    payloadStatus === 'RELEASE_DEVIATION' ||
+    localQcReportStatus === 'PASSED' ||
+    localQcReportStatus === 'PASSED_WITH_DEVIATION' ||
+    localQcReportStatus === 'RELEASED' ||
+    localQcReportStatus === 'RELEASE_DEVIATION'
+  ) {
+    resolvedQcStatus = (
+      rawDbStatus === 'PASSED_WITH_DEVIATION' ||
+      payloadStatus === 'PASSED_WITH_DEVIATION' ||
+      localQcReportStatus === 'PASSED_WITH_DEVIATION' ||
+      rawDbStatus === 'RELEASE_DEVIATION' ||
+      payloadStatus === 'RELEASE_DEVIATION'
+    )
+      ? 'PASSED_WITH_DEVIATION'
+      : 'RELEASED';
+  } else if (rawDbStatus === 'REJECTED' || payloadStatus === 'REJECTED' || localQcReportStatus === 'REJECTED') {
+    resolvedQcStatus = 'REJECTED';
+  } else if (
     payloadStatus === 'REVERTED_TO_WAREHOUSE' || 
+    rawDbStatus === 'REVERTED_TO_WAREHOUSE' ||
     rawDbStatus === 'DIKEMBALIKAN KE GUDANG' ||
-    Boolean(d.revert_reason || d.revertReason || (d.notes && d.notes.includes('REVERTED_TO_WAREHOUSE')))
+    localQcReportStatus === 'REVERTED_TO_WAREHOUSE' ||
+    (Boolean(d.revert_reason || d.revertReason) && rawDbStatus !== 'QUARANTINE' && rawDbStatus !== 'PASSED' && rawDbStatus !== 'RELEASED')
   ) {
     resolvedQcStatus = 'REVERTED_TO_WAREHOUSE';
-  } else if (payloadStatus && payloadStatus !== 'QUARANTINE') {
-    resolvedQcStatus = payloadStatus === 'PASSED' ? 'RELEASED' : payloadStatus;
-  } else if (rawDbStatus === 'PASSED' || rawDbStatus === 'RELEASED') {
-    resolvedQcStatus = 'RELEASED';
-  } else if (rawDbStatus === 'REJECTED') {
-    resolvedQcStatus = 'REJECTED';
+  } else if (payloadStatus === 'QUALITY_CONTROL_PROCESS' || rawDbStatus === 'QUALITY_CONTROL_PROCESS' || localQcReportStatus === 'QUALITY_CONTROL_PROCESS') {
+    resolvedQcStatus = 'QUALITY_CONTROL_PROCESS';
+  } else if (payloadStatus === 'AWAITING_QM_AUTHORIZATION' || rawDbStatus === 'AWAITING_QM_AUTHORIZATION' || localQcReportStatus === 'AWAITING_QM_AUTHORIZATION') {
+    resolvedQcStatus = 'AWAITING_QM_AUTHORIZATION';
   } else {
     resolvedQcStatus = d.qc_status || d.qcStatus || 'QUARANTINE';
-  }
-
-  if (d.grn_number === 'GRN-BB-261009-03') {
-     console.log('DEBUG: GRN-BB-261009-03 mapped status:', resolvedQcStatus, 'rawDbStatus:', rawDbStatus);
   }
 
 
@@ -662,7 +705,13 @@ export const warehouseService = {
   getGrnGroupCounts: async (materialType?: 'raw' | 'packaging'): Promise<{ unreleasedCount: number; releasedCount: number }> => {
     try {
       const allRecords = await warehouseService.getGrnRecords(false, 'all');
-      const filtered = materialType ? allRecords.filter((r) => r.materialType === materialType) : allRecords;
+      const filtered = materialType
+        ? allRecords.filter((r) => {
+            const normalizedType = String(r.materialType || '').toLowerCase().trim();
+            const isPackaging = normalizedType === 'packaging' || normalizedType === 'pm' || normalizedType === 'bk' || normalizedType.includes('kemas');
+            return materialType === 'packaging' ? isPackaging : !isPackaging;
+          })
+        : allRecords;
       const unreleasedCount = filtered.filter((r) => UNRELEASED_QC_STATUSES.includes(r.qcStatus)).length;
       const releasedCount = filtered.filter((r) => RELEASED_QC_STATUSES.includes(r.qcStatus)).length;
       return { unreleasedCount, releasedCount };
@@ -752,7 +801,11 @@ export const warehouseService = {
     // 2. Fallback dari memori cache
     let list = inMemoryGrnRecords.length > 0 ? inMemoryGrnRecords : await warehouseService.getGrnRecords();
     if (materialType && materialType !== 'all') {
-      list = list.filter((r) => r.materialType === materialType);
+      list = list.filter((r) => {
+        const normalizedType = String(r.materialType || '').toLowerCase().trim();
+        const isPackaging = normalizedType === 'packaging' || normalizedType === 'pm' || normalizedType === 'bk' || normalizedType.includes('kemas');
+        return materialType === 'packaging' ? isPackaging : !isPackaging;
+      });
     }
     if (status && status !== 'ALL') {
       if (status === 'PASSED' || status === 'RELEASED') {
@@ -898,6 +951,22 @@ export const warehouseService = {
     lastGrnFetchTime = Date.now();
     paginatedGrnCache.clear();
 
+    // Persist to local storage across browser refreshes
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem(WAREHOUSE_GRN_STORAGE_KEY, JSON.stringify(inMemoryGrnRecords));
+      } catch {}
+    }
+
+    // Direct background sync to Cloudflare D1 Local SQLite Engine
+    try {
+      fetch('/api/grn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRecord),
+      }).catch(() => {});
+    } catch {}
+
     return newRecord;
   },
 
@@ -1003,6 +1072,43 @@ export const warehouseService = {
     lastGrnFetchTime = Date.now();
     paginatedGrnCache.clear();
 
+    // Persist to local storage across browser refreshes
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem(WAREHOUSE_GRN_STORAGE_KEY, JSON.stringify(inMemoryGrnRecords));
+      } catch {}
+    }
+
+    // Direct background sync to Cloudflare D1 Local SQLite Engine
+    try {
+      fetch('/api/grn', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: updatedRecord.id,
+          grnNumber: updatedRecord.grnNumber,
+          grn_number: updatedRecord.grnNumber,
+          qcStatus: updatedRecord.qcStatus,
+          qc_status: updatedRecord.qcStatus,
+          notes: updatedRecord.notes,
+          currentQuantity: updatedRecord.currentQuantity,
+          current_quantity: updatedRecord.currentQuantity,
+          revertReason: updatedRecord.revertReason || null,
+          revert_reason: updatedRecord.revertReason || null,
+          revertedBy: updatedRecord.revertedBy || null,
+          reverted_by: updatedRecord.revertedBy || null,
+          revertedAt: updatedRecord.revertedAt || null,
+          reverted_at: updatedRecord.revertedAt || null,
+          sampledContainers: updatedRecord.sampledContainers || null,
+          sampled_containers: updatedRecord.sampledContainers || null,
+          sampledBy: updatedRecord.sampledBy || null,
+          sampled_by: updatedRecord.sampledBy || null,
+          samplingDateTime: updatedRecord.samplingDateTime || null,
+          sampling_date_time: updatedRecord.samplingDateTime || null,
+        }),
+      }).catch(() => {});
+    } catch {}
+
     return updatedRecord;
   },
 
@@ -1062,10 +1168,24 @@ export const warehouseService = {
       }
     }
 
+    // Direct background deletion from Cloudflare D1 Local SQLite Engine
+    try {
+      fetch(`/api/grn?id=${encodeURIComponent(target?.grnNumber || id)}`, {
+        method: 'DELETE',
+      }).catch(() => {});
+    } catch {}
+
     // Update in-memory cache
     inMemoryGrnRecords = inMemoryGrnRecords.filter((r) => r.id !== id && r.grnNumber !== id && (!target || r.id !== target.id));
     lastGrnFetchTime = Date.now();
     paginatedGrnCache.clear();
+
+    // Persist to local storage across browser refreshes
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem(WAREHOUSE_GRN_STORAGE_KEY, JSON.stringify(inMemoryGrnRecords));
+      } catch {}
+    }
 
     return true;
   },
@@ -1077,6 +1197,11 @@ export const warehouseService = {
     inMemoryGrnRecords = [];
     lastGrnFetchTime = 0;
     paginatedGrnCache.clear();
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.removeItem(WAREHOUSE_GRN_STORAGE_KEY);
+      } catch {}
+    }
     if (isSupabaseConfigured && supabase) {
       try {
         await Promise.allSettled([
