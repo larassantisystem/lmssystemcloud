@@ -13,6 +13,7 @@ import { WarehouseModule } from './features/warehouse/components/WarehouseModule
 import { QualityModule } from './features/quality/components/QualityModule';
 import { PublicCoaVerificationPage } from './features/quality/components/PublicCoaVerificationPage';
 import { DeviationModule } from './features/quality/components/deviations/DeviationModule';
+import { PpicModule } from './features/ppic/PpicModule';
 import { authService } from './core/auth/authService';
 import { DepartmentWorkspaceDashboard } from './features/dashboard/DepartmentWorkspaceDashboard';
 import { Department } from './types';
@@ -202,6 +203,12 @@ const MainAppContent: React.FC = () => {
         </div>
       )}
 
+      {activeTab === 'ppic' && (
+        <div className="max-w-6xl mx-auto">
+          <PpicModule />
+        </div>
+      )}
+
       {activeTab === 'deviations' && (
         <div className="max-w-6xl mx-auto space-y-4">
           <DeviationModule
@@ -210,7 +217,7 @@ const MainAppContent: React.FC = () => {
         </div>
       )}
 
-      {activeTab !== 'rnd' && activeTab !== 'admin' && activeTab !== 'warehouse' && activeTab !== 'quality' && activeTab !== 'deviations' && activeTab !== 'dashboard' && (
+      {activeTab !== 'rnd' && activeTab !== 'admin' && activeTab !== 'warehouse' && activeTab !== 'quality' && activeTab !== 'deviations' && activeTab !== 'ppic' && activeTab !== 'dashboard' && (
         <div className="max-w-4xl mx-auto py-16 text-center space-y-6">
           <div className="w-20 h-20 rounded-3xl bg-white border border-slate-200 flex items-center justify-center mx-auto shadow-xs text-slate-700">
             {activeTab === 'ppic' && <CalendarDays className="w-9 h-9 text-blue-700" />}

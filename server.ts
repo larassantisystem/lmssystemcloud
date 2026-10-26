@@ -148,10 +148,11 @@ if (fs.existsSync(schemaPath)) {
       }
     }
 
-    // Sync product_code and code in products
+    // Sync product_code and code in products and ensure unique index
     try {
       db.exec("UPDATE products SET product_code = code WHERE (product_code IS NULL OR product_code = '') AND code IS NOT NULL;");
       db.exec("UPDATE products SET code = product_code WHERE (code IS NULL OR code = '') AND product_code IS NOT NULL;");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_products_code ON products(code);");
     } catch (e) {}
 
     // Clean up any empty grn_number in warehouse_grn

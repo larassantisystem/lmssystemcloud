@@ -853,7 +853,10 @@ class D1QueryBuilder {
    */
   upsert(values: Record<string, any> | Record<string, any>[], options: { onConflict?: string } = {}) {
     const list = Array.isArray(values) ? values : [values];
-    const conflictCol = options.onConflict || 'id';
+    let conflictCol = options.onConflict || 'id';
+    if (this.table === 'products' && conflictCol === 'product_code') {
+      conflictCol = 'code';
+    }
 
     const executeUpsert = async () => {
       if (list.length === 0) return { data: [], error: null };
@@ -861,6 +864,13 @@ class D1QueryBuilder {
         const results: any[] = [];
         for (const item of list) {
           const itemToInsert = { ...item };
+          if (this.table === 'products') {
+            if (!itemToInsert.code && itemToInsert.product_code) {
+              itemToInsert.code = itemToInsert.product_code;
+            } else if (!itemToInsert.product_code && itemToInsert.code) {
+              itemToInsert.product_code = itemToInsert.code;
+            }
+          }
           if (!itemToInsert.id && conflictCol !== 'id') {
             itemToInsert.id = `id-${Date.now()}-${Math.random().toString(36).substr(2, 7)}`;
           }
@@ -884,7 +894,34 @@ class D1QueryBuilder {
             VALUES (${placeholders})
             ON CONFLICT("${conflictCol}") DO UPDATE SET ${updateSets || `"${conflictCol}" = excluded."${conflictCol}"`}
           `;
-          await this.client.query(sql, vals);
+
+          try {
+            await this.client.query(sql, vals);
+          } catch (conflictErr: any) {
+            const errMsg = conflictErr?.message || String(conflictErr);
+            if (errMsg.includes('PRIMARY KEY') || errMsg.includes('UNIQUE constraint') || errMsg.includes('ON CONFLICT')) {
+              // Fallback for cases where SQLite column does not have a formal UNIQUE constraint
+              const conflictVal = itemToInsert[conflictCol] ?? itemToInsert.id;
+              const existing = conflictVal ? await this.client.query(`SELECT id FROM ${this.table} WHERE "${conflictCol}" = ? LIMIT 1`, [conflictVal]) : null;
+              if (existing && existing.results && existing.results.length > 0) {
+                const existingId = existing.results[0].id;
+                const updateKeys = keys.filter(k => k !== 'id' && k !== conflictCol);
+                const updateSql = `UPDATE ${this.table} SET ${updateKeys.map(k => `"${k}" = ?`).join(', ')} WHERE id = ?`;
+                const updateVals = updateKeys.map(k => {
+                  const val = itemToInsert[k];
+                  return (val && typeof val === 'object' && !(val instanceof Date)) ? JSON.stringify(val) : val;
+                });
+                updateVals.push(existingId);
+                await this.client.query(updateSql, updateVals);
+              } else {
+                const insertSql = `INSERT INTO ${this.table} (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+                await this.client.query(insertSql, vals);
+              }
+            } else {
+              throw conflictErr;
+            }
+          }
+
           results.push(itemToInsert);
         }
         return { data: results, error: null };

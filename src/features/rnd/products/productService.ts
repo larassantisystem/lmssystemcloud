@@ -678,7 +678,7 @@ export const productService = {
       let res = await productService.withNetworkRetry(async () => {
         return await supabase
           .from('products')
-          .upsert(productPayload, { onConflict: 'product_code' });
+          .upsert(productPayload, { onConflict: 'code' });
       });
 
       // Handling jika kolom finished_parameters atau qc_parameters belum ada di schema cache Supabase
@@ -689,7 +689,7 @@ export const productService = {
         res = await productService.withNetworkRetry(async () => {
           return await supabase
             .from('products')
-            .upsert(productPayload, { onConflict: 'product_code' });
+            .upsert(productPayload, { onConflict: 'code' });
         });
       }
 
@@ -921,7 +921,7 @@ export const productService = {
         let res = await productService.withNetworkRetry(async () => {
           return await supabase
             .from('products')
-            .upsert(payloads, { onConflict: 'product_code' });
+            .upsert(payloads, { onConflict: 'code' });
         });
 
         // Handling jika kolom finished_parameters atau qc_parameters belum ada di schema cache Supabase
@@ -931,7 +931,7 @@ export const productService = {
           res = await productService.withNetworkRetry(async () => {
             return await supabase
               .from('products')
-              .upsert(fallbackPayloads, { onConflict: 'product_code' });
+              .upsert(fallbackPayloads, { onConflict: 'code' });
           });
         }
 
@@ -964,6 +964,11 @@ export const productService = {
    */
   clearAllProducts: async (): Promise<{ success: boolean; error?: string }> => {
     inMemoryProducts = [];
+    lastProductsFetchTime = 0;
+    cachedTotalProducts = null;
+    lastCountFetchTime = 0;
+    paginatedCache.clear();
+    productDetailCache.clear();
     if (!isSupabaseConfigured || !supabase) {
       return { success: true };
     }

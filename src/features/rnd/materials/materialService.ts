@@ -7,6 +7,7 @@ let inMemoryRawMaterials: RawMaterial[] = [];
 let lastFetchTime = 0;
 let cachedTotalCount: number | null = null;
 let lastCountFetchTime = 0;
+let inFlightFetchPromise: Promise<RawMaterial[]> | null = null;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM browser untuk menghemat egress
 const paginatedCache = new Map<string, { timestamp: number; result: any }>();
 const materialDetailCache = new Map<string, { timestamp: number; data: RawMaterial }>();
@@ -316,53 +317,63 @@ export const materialService = {
       return inMemoryRawMaterials;
     }
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('raw_materials')
-          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions, qc_parameters')
-          .order('code', { ascending: true })
-          .limit(5000);
-
-        if (!error && data && data.length > 0) {
-          const mapped: RawMaterial[] = data.map((m: any) => {
-            const rawCats = parseJsonArray<string>(m.categories, []);
-            const resolvedCategories = rawCats.length > 0 
-              ? rawCats 
-              : (m.category ? [m.category] : ['active']);
-
-            return {
-              id: m.id,
-              code: m.code,
-              specNumber: m.spec_number || m.specNumber || `SP-BB-${m.code}`,
-              name: m.name,
-              chemicalName: m.chemical_name || m.chemicalName || '',
-              category: m.category || resolvedCategories[0] || 'active',
-              categories: resolvedCategories,
-              otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
-              storageConditions: m.storage_conditions || m.storageConditions || '',
-              sdsDocNumber: '',
-              sdsFileUrl: undefined,
-              sdsFileName: undefined,
-              approvedSubstitutes: [],
-              manufacturer: m.manufacturer || '',
-              qcParameters: parseJsonArray(m.qc_parameters, []),
-              supplierLeadTimeDays: 14,
-              reorderPoint: 50,
-              lastModifiedBy: m.last_modified_by,
-              lastModifiedAt: m.last_modified_at,
-            };
-          });
-          inMemoryRawMaterials = mapped;
-          lastFetchTime = Date.now();
-          return mapped;
-        }
-      } catch (err) {
-        console.error('[materialService] D1 raw materials fetch exception:', err);
-      }
+    if (inFlightFetchPromise && !forceRefresh) {
+      return inFlightFetchPromise;
     }
 
-    return inMemoryRawMaterials;
+    inFlightFetchPromise = (async () => {
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('raw_materials')
+            .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions, qc_parameters')
+            .order('code', { ascending: true })
+            .limit(5000);
+
+          if (!error && data && data.length > 0) {
+            const mapped: RawMaterial[] = data.map((m: any) => {
+              const rawCats = parseJsonArray<string>(m.categories, []);
+              const resolvedCategories = rawCats.length > 0 
+                ? rawCats 
+                : (m.category ? [m.category] : ['active']);
+
+              return {
+                id: m.id,
+                code: m.code,
+                specNumber: m.spec_number || m.specNumber || `SP-BB-${m.code}`,
+                name: m.name,
+                chemicalName: m.chemical_name || m.chemicalName || '',
+                category: m.category || resolvedCategories[0] || 'active',
+                categories: resolvedCategories,
+                otherCategorySpecification: m.other_category_specification || m.otherCategorySpecification,
+                storageConditions: m.storage_conditions || m.storageConditions || '',
+                sdsDocNumber: '',
+                sdsFileUrl: undefined,
+                sdsFileName: undefined,
+                approvedSubstitutes: [],
+                manufacturer: m.manufacturer || '',
+                qcParameters: parseJsonArray(m.qc_parameters, []),
+                supplierLeadTimeDays: 14,
+                reorderPoint: 50,
+                lastModifiedBy: m.last_modified_by,
+                lastModifiedAt: m.last_modified_at,
+              };
+            });
+            inMemoryRawMaterials = mapped;
+            lastFetchTime = Date.now();
+            return mapped;
+          }
+        } catch (err) {
+          console.error('[materialService] D1 raw materials fetch exception:', err);
+        }
+      }
+
+      return inMemoryRawMaterials;
+    })().finally(() => {
+      inFlightFetchPromise = null;
+    });
+
+    return inFlightFetchPromise;
   },
 
   saveSingleMaterial: async (item: RawMaterial): Promise<{ success: boolean; error?: string; updatedId?: string }> => {

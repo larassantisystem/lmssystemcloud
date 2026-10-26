@@ -7,6 +7,7 @@ let inMemoryPackaging: PackagingMaterial[] = [];
 let lastFetchTime = 0;
 let cachedTotalCount: number | null = null;
 let lastCountFetchTime = 0;
+let inFlightFetchPromise: Promise<PackagingMaterial[]> | null = null;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 60 menit cache di RAM browser untuk menghemat egress
 const paginatedCache = new Map<string, { timestamp: number; result: any }>();
 const detailCache = new Map<string, { timestamp: number; data: PackagingMaterial }>();
@@ -329,42 +330,52 @@ export const packagingService = {
       return inMemoryPackaging;
     }
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('packaging_materials')
-          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions, qc_parameters')
-          .order('code', { ascending: true })
-          .limit(5000);
-
-        if (!error && data && data.length > 0) {
-          const mapped: PackagingMaterial[] = data.map((p: any) => ({
-            id: p.id,
-            code: p.code,
-            specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
-            name: p.name,
-            type: p.type || 'primary',
-            unit: p.unit || 'Pcs',
-            unitCapacityGrams: p.unit_capacity_grams ?? p.unitCapacityGrams,
-            supplier: p.supplier || p.manufacturer || '',
-            manufacturer: p.manufacturer || p.supplier || '',
-            storageLocation: p.storage_location || '',
-            storageConditions: p.storage_conditions || p.storageConditions || '',
-            qcParameters: parseJsonArray(p.qc_parameters, []),
-            reorderPoint: p.reorder_point ?? 100,
-            lastModifiedBy: p.last_modified_by,
-            lastModifiedAt: p.last_modified_at,
-          }));
-          inMemoryPackaging = mapped;
-          lastFetchTime = Date.now();
-          return mapped;
-        }
-      } catch (err) {
-        console.error('[packagingService] D1 packaging materials fetch exception:', err);
-      }
+    if (inFlightFetchPromise && !forceRefresh) {
+      return inFlightFetchPromise;
     }
 
-    return inMemoryPackaging;
+    inFlightFetchPromise = (async () => {
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('packaging_materials')
+            .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_conditions, qc_parameters')
+            .order('code', { ascending: true })
+            .limit(5000);
+
+          if (!error && data && data.length > 0) {
+            const mapped: PackagingMaterial[] = data.map((p: any) => ({
+              id: p.id,
+              code: p.code,
+              specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
+              name: p.name,
+              type: p.type || 'primary',
+              unit: p.unit || 'Pcs',
+              unitCapacityGrams: p.unit_capacity_grams ?? p.unitCapacityGrams,
+              supplier: p.supplier || p.manufacturer || '',
+              manufacturer: p.manufacturer || p.supplier || '',
+              storageLocation: p.storage_location || '',
+              storageConditions: p.storage_conditions || p.storageConditions || '',
+              qcParameters: parseJsonArray(p.qc_parameters, []),
+              reorderPoint: p.reorder_point ?? 100,
+              lastModifiedBy: p.last_modified_by,
+              lastModifiedAt: p.last_modified_at,
+            }));
+            inMemoryPackaging = mapped;
+            lastFetchTime = Date.now();
+            return mapped;
+          }
+        } catch (err) {
+          console.error('[packagingService] D1 packaging materials fetch exception:', err);
+        }
+      }
+
+      return inMemoryPackaging;
+    })().finally(() => {
+      inFlightFetchPromise = null;
+    });
+
+    return inFlightFetchPromise;
   },
 
   saveSinglePackagingMaterial: async (item: PackagingMaterial): Promise<{ success: boolean; error?: string; updatedId?: string }> => {
