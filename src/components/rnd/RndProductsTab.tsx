@@ -86,9 +86,24 @@ export const RndProductsTab: React.FC<RndProductsTabProps> = ({
   const [showProductModal, setShowProductModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importTab, setImportTab] = useState<'products' | 'variants'>('products');
-  const [importMethod, setImportMethod] = useState<'excel' | 'paste'>('excel');
+  const [importMethod, setImportMethod] = useState<'file' | 'paste'>('file');
+  const [productImportMethod, setProductImportMethod] = useState<'file' | 'paste'>('file');
   const [pasteText, setPasteText] = useState('');
+  const [productPasteText, setProductPasteText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+
+  // Preview states for Import Excel / Spreadsheet
+  const [parsedProductsPreview, setParsedProductsPreview] = useState<Product[]>([]);
+  const [parsedVariantsPreview, setParsedVariantsPreview] = useState<{
+    variant: ProductVariant;
+    parentCode: string;
+    parentName: string;
+    parentFound: boolean;
+    parentId?: string;
+  }[]>([]);
+  const [previewFileName, setPreviewFileName] = useState<string | null>(null);
+  const [isSubmittingImport, setIsSubmittingImport] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [prodCode, setProdCode] = useState('');
   const [prodName, setProdName] = useState('');
@@ -676,28 +691,155 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
       }
 
       if (importedProductsList.length === 0) {
-        alert('File Excel tidak memiliki baris produk yang valid.');
+        setImportError('File Excel tidak memiliki baris produk yang valid.');
         return;
       }
 
-      // Simpan seluruh data sekaligus dalam batch terdedikasi ke Supabase
-      const saveRes = await productService.saveProducts(importedProductsList);
+      setParsedProductsPreview(importedProductsList);
+      setPreviewFileName(file.name);
+      setImportError(null);
+    } catch (err: any) {
+      console.error('Error importing excel:', err);
+      setImportError(`Gagal membaca file Excel: ${err.message || 'Format salah'}`);
+    }
+  };
 
-      // Update state tampilan secara kolektif
-      for (const prod of importedProductsList) {
+  const handleProcessPastedProducts = () => {
+    if (!productPasteText.trim()) {
+      setImportError('Silakan tempel teks tabel dari spreadsheet terlebih dahulu.');
+      return;
+    }
+
+    try {
+      const lines = productPasteText.trim().split('\n');
+      if (lines.length === 0) {
+        setImportError('Data teks kosong.');
+        return;
+      }
+
+      let startIdx = 0;
+      const firstLineLower = lines[0].toLowerCase();
+      if (
+        firstLineLower.includes('kode') ||
+        firstLineLower.includes('nama') ||
+        firstLineLower.includes('product') ||
+        firstLineLower.includes('brand') ||
+        firstLineLower.includes('kategori')
+      ) {
+        startIdx = 1;
+      }
+
+      const importedProductsList: Product[] = [];
+
+      for (let i = startIdx; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split('\t').map((p) => p.trim());
+        const code = parts[0] || `PJ${String(products.length + importedProductsList.length + 1).padStart(4, '0')}`;
+        const name = parts[1] || `Produk Baru ${code}`;
+        const category = parts[2] || 'Skincare - Facial Treatment';
+        const brand = parts[3] || 'Larassanti';
+        const unit = parts[4] || 'pcs (Pieces)';
+        const storageConditions = parts[5] || 'Suhu Ruang (15-25°C)';
+        const bpomNotificationNumber = parts[6] || '';
+        const expNotificationDate = parts[7] ? formatToISODate(parts[7]) : '';
+        const description = parts[8] || '';
+
+        const qcParameters: QCParameter[] = [
+          {
+            id: `qc-${Date.now()}-${i}-ph`,
+            name: 'pH Sediaan (Bulk)',
+            parameterName: 'pH Sediaan (Bulk)',
+            specification: '6.0 - 6.8',
+            acceptanceCondition: '6.0 - 6.8',
+            unit: '',
+          },
+          {
+            id: `qc-${Date.now()}-${i}-visc`,
+            name: 'Viskositas',
+            parameterName: 'Viskositas',
+            specification: '3000 - 5000',
+            acceptanceCondition: '3000 - 5000',
+            unit: 'cPs',
+          },
+        ];
+
+        const finishedQcParameters: QCParameter[] = [
+          {
+            id: `fin-${Date.now()}-${i}-net`,
+            name: 'Berat Netto / Isi Aktual',
+            parameterName: 'Berat Netto / Isi Aktual',
+            specification: '30 ± 0.5',
+            acceptanceCondition: '30 ± 0.5',
+            unit: 'gram',
+          },
+          {
+            id: `fin-${Date.now()}-${i}-leak`,
+            name: 'Uji Kebocoran Kemasan',
+            parameterName: 'Uji Kebocoran Kemasan',
+            specification: 'Negatif / Tidak Bocor',
+            acceptanceCondition: 'Negatif / Tidak Bocor',
+            unit: '',
+          },
+        ];
+
+        importedProductsList.push({
+          id: `prod-${Date.now()}-${i}`,
+          code,
+          productCode: code,
+          name,
+          category,
+          brand,
+          description,
+          unit,
+          storageConditions,
+          bpomNotificationNumber,
+          bpomNotificationExt: expNotificationDate,
+          expNotificationDate,
+          qcParameters,
+          finishedQcParameters,
+          variants: [],
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      if (importedProductsList.length === 0) {
+        setImportError('Tidak ada baris produk valid yang dapat dianalisis.');
+        return;
+      }
+
+      setParsedProductsPreview(importedProductsList);
+      setPreviewFileName('Salin-Tempel Spreadsheet');
+      setImportError(null);
+    } catch (err: any) {
+      setImportError(`Gagal menganalisis teks paste: ${err.message || 'Format tidak valid'}`);
+    }
+  };
+
+  const handleExecuteProductImport = async () => {
+    if (parsedProductsPreview.length === 0 || isSubmittingImport) return;
+    setIsSubmittingImport(true);
+    setImportError(null);
+    try {
+      const saveRes = await productService.saveProducts(parsedProductsPreview);
+      for (const prod of parsedProductsPreview) {
         onSaveProduct(prod);
       }
 
       if (saveRes.error) {
-        alert(`Peringatan Impor Excel:\n${saveRes.error}\n\nStatus: ${saveRes.count} dari ${importedProductsList.length} produk tersimpan di Supabase, sisanya ditampilkan di memori.`);
+        alert(`Peringatan Impor Excel:\n${saveRes.error}\n\nStatus: ${saveRes.count} dari ${parsedProductsPreview.length} produk tersimpan di database, sisanya ditampilkan di memori.`);
       } else {
-        setSuccessToast(`Berhasil mengimpor ${importedProductsList.length} Master Produk dengan Spesifikasi Ruahan & Produk Jadi ke Supabase!`);
+        setSuccessToast(`Berhasil mengimpor ${parsedProductsPreview.length} Master Produk Jadi beserta Parameter Uji Ruahan & Produk Jadi ke database!`);
         setTimeout(() => setSuccessToast(null), 5000);
       }
+      setParsedProductsPreview([]);
+      setPreviewFileName(null);
       setShowImportModal(false);
     } catch (err: any) {
-      console.error('Error importing excel:', err);
-      alert(`Gagal mengimpor file: ${err.message || 'Format salah'}`);
+      console.error('Error saving imported products:', err);
+      setImportError(`Gagal menyimpan produk: ${err.message || 'Terjadi kesalahan sistem'}`);
+    } finally {
+      setIsSubmittingImport(false);
     }
   };
 
@@ -792,9 +934,13 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
       if (colBarcode === -1) colBarcode = 5;
       if (colDesc === -1) colDesc = 6;
 
-      let importedCount = 0;
-      let errorCount = 0;
-      const errorDetails: string[] = [];
+      const parsedList: {
+        variant: ProductVariant;
+        parentCode: string;
+        parentName: string;
+        parentFound: boolean;
+        parentId?: string;
+      }[] = [];
 
       for (let i = 0; i < dataRows.length; i++) {
         const row = dataRows[i];
@@ -807,14 +953,8 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
           (p) => p.code.toLowerCase() === parentCode.toLowerCase() || p.id === parentCode || (p.productCode && p.productCode.toLowerCase() === parentCode.toLowerCase())
         );
 
-        if (!parentProd) {
-          errorCount++;
-          errorDetails.push(`Baris ${i + headerRowIndex + 2}: Master Produk Induk "${parentCode}" tidak ditemukan di database.`);
-          continue;
-        }
-
         const rawSku = row[colSku] !== undefined && row[colSku] !== null ? String(row[colSku]).trim().toUpperCase() : '';
-        const sku = rawSku || `${parentProd.code}-V${parentProd.variants.length + i + 1}`;
+        const sku = rawSku || `${parentCode}-V${i + 1}`;
         const variantName = row[colName] !== undefined && row[colName] !== null ? String(row[colName]).trim() : `${row[colNet] || '30'} g`;
         const netVolume = Number(row[colNet]) || 30;
         const barcode = row[colBarcode] !== undefined && row[colBarcode] !== null ? String(row[colBarcode]).trim() : generateEAN13();
@@ -822,7 +962,7 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
 
         const variantData: ProductVariant = {
           id: `var-${Date.now()}-${i}`,
-          productId: parentProd.id,
+          productId: parentProd ? parentProd.id : '',
           variantCode: sku,
           sku: sku,
           variantName: variantName,
@@ -830,13 +970,126 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
           netVolumeGrams: netVolume,
           bulkFormulaCode: formulations.length > 0 ? formulations[0].code : '',
           packagingBom: [],
-          bpomNumber: parentProd.bpomNotificationNumber || '',
+          bpomNumber: parentProd?.bpomNotificationNumber || '',
           barcode: barcode,
           description: description,
           createdAt: new Date().toISOString(),
         };
 
-        await onSaveVariant(parentProd.id, variantData);
+        parsedList.push({
+          variant: variantData,
+          parentCode,
+          parentName: parentProd ? parentProd.name : '(Induk Belum Terdaftar)',
+          parentFound: !!parentProd,
+          parentId: parentProd?.id,
+        });
+      }
+
+      if (parsedList.length === 0) {
+        setImportError('File Excel varian kosong atau tidak memiliki baris data.');
+        return;
+      }
+
+      setParsedVariantsPreview(parsedList);
+      setPreviewFileName(file.name);
+      setImportError(null);
+    } catch (err: any) {
+      console.error('Error importing variant excel:', err);
+      setImportError(`Gagal memproses file Excel Varian: ${err.message || 'Format tidak sesuai'}`);
+    }
+  };
+
+  const handleProcessPastedVariants = () => {
+    if (!pasteText.trim()) {
+      setImportError('Silakan tempel (paste) data teks varian dari spreadsheet terlebih dahulu.');
+      return;
+    }
+
+    try {
+      const lines = pasteText.trim().split('\n');
+      const parsedList: {
+        variant: ProductVariant;
+        parentCode: string;
+        parentName: string;
+        parentFound: boolean;
+        parentId?: string;
+      }[] = [];
+
+      for (let idx = 0; idx < lines.length; idx++) {
+        const line = lines[idx];
+        const parts = line.split('\t').map((p) => p.trim());
+        if (parts.length < 2 || !parts[0]) continue;
+
+        // Skip header jika ter-copy
+        if (idx === 0 && (parts[0].toLowerCase().includes('kode') || parts[0].toLowerCase().includes('parent') || parts[0].toLowerCase().includes('induk'))) {
+          continue;
+        }
+
+        const parentCode = parts[0];
+        const parentProd = products.find(
+          (p) => p.code.toLowerCase() === parentCode.toLowerCase() || p.id === parentCode || (p.productCode && p.productCode.toLowerCase() === parentCode.toLowerCase())
+        );
+
+        const sku = (parts[1] || `${parentCode}-V${idx + 1}`).toUpperCase();
+        const variantName = parts[2] || `${parts[3] || '30'} g`;
+        const netVolume = Number(parts[3]) || 30;
+        const barcode = parts[5] ? parts[5] : generateEAN13();
+        const description = parts[6] || '';
+
+        const variantData: ProductVariant = {
+          id: `var-${Date.now()}-${idx}`,
+          productId: parentProd ? parentProd.id : '',
+          variantCode: sku,
+          sku: sku,
+          variantName: variantName,
+          status: 'active',
+          netVolumeGrams: netVolume,
+          bulkFormulaCode: formulations.length > 0 ? formulations[0].code : '',
+          packagingBom: [],
+          bpomNumber: parentProd?.bpomNotificationNumber || '',
+          barcode: barcode,
+          description: description,
+          createdAt: new Date().toISOString(),
+        };
+
+        parsedList.push({
+          variant: variantData,
+          parentCode,
+          parentName: parentProd ? parentProd.name : '(Induk Belum Terdaftar)',
+          parentFound: !!parentProd,
+          parentId: parentProd?.id,
+        });
+      }
+
+      if (parsedList.length === 0) {
+        setImportError('Tidak ada baris varian valid yang ditemukan pada teks yang ditempel.');
+        return;
+      }
+
+      setParsedVariantsPreview(parsedList);
+      setPreviewFileName('Salin-Tempel Spreadsheet');
+      setImportError(null);
+    } catch (err: any) {
+      setImportError(`Gagal menganalisis teks varian: ${err.message || 'Format tidak valid'}`);
+    }
+  };
+
+  const handleExecuteVariantImport = async () => {
+    if (parsedVariantsPreview.length === 0 || isSubmittingImport) return;
+    setIsSubmittingImport(true);
+    setImportError(null);
+    let importedCount = 0;
+    let errorCount = 0;
+    const errorDetails: string[] = [];
+
+    try {
+      for (const item of parsedVariantsPreview) {
+        if (!item.parentFound || !item.parentId) {
+          errorCount++;
+          errorDetails.push(`Induk "${item.parentCode}" tidak terdaftar di database.`);
+          continue;
+        }
+        await onSaveVariant(item.parentId, item.variant);
         importedCount++;
       }
 
@@ -845,83 +1098,18 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
       }
 
       if (importedCount > 0) {
-        setSuccessToast(`Berhasil mengimpor ${importedCount} Varian Produk ke tabel database 'product_variants'!`);
-        setShowImportModal(false);
+        setSuccessToast(`Berhasil mengimpor ${importedCount} Varian Produk ke database!`);
         setTimeout(() => setSuccessToast(null), 5000);
       }
-    } catch (err: any) {
-      console.error('Error importing variant excel:', err);
-      alert(`Gagal memproses file Excel Varian: ${err.message || 'Format tidak sesuai'}`);
-    }
-  };
-
-  const handleProcessPastedVariants = async () => {
-    if (!pasteText.trim()) {
-      alert('Silakan tempel (paste) data teks varian dari spreadsheet terlebih dahulu.');
-      return;
-    }
-
-    const lines = pasteText.trim().split('\n');
-    let importedCount = 0;
-    let errorCount = 0;
-    const errorDetails: string[] = [];
-
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx];
-      const parts = line.split('\t').map((p) => p.trim());
-      if (parts.length < 2 || !parts[0]) continue;
-
-      // Skip header jika ter-copy
-      if (idx === 0 && (parts[0].toLowerCase().includes('kode') || parts[0].toLowerCase().includes('parent') || parts[0].toLowerCase().includes('induk'))) {
-        continue;
-      }
-
-      const parentCode = parts[0];
-      const parentProd = products.find(
-        (p) => p.code.toLowerCase() === parentCode.toLowerCase() || p.id === parentCode
-      );
-
-      if (!parentProd) {
-        errorCount++;
-        errorDetails.push(`Baris ${idx + 1}: Master Produk "${parentCode}" tidak ditemukan.`);
-        continue;
-      }
-
-      const sku = (parts[1] || `${parentProd.code}-V${parentProd.variants.length + 1}`).toUpperCase();
-      const variantName = parts[2] || `${parts[3] || '30'} g`;
-      const netVolume = Number(parts[3]) || 30;
-      const barcode = parts[5] ? parts[5] : generateEAN13();
-      const description = parts[6] || '';
-
-      const variantData: ProductVariant = {
-        id: `var-${Date.now()}-${idx}`,
-        productId: parentProd.id,
-        variantCode: sku,
-        sku: sku,
-        variantName: variantName,
-        status: 'active',
-        netVolumeGrams: netVolume,
-        bulkFormulaCode: formulations.length > 0 ? formulations[0].code : '',
-        packagingBom: [],
-        bpomNumber: parentProd.bpomNotificationNumber || '',
-        barcode: barcode,
-        description: description,
-        createdAt: new Date().toISOString(),
-      };
-
-      await onSaveVariant(parentProd.id, variantData);
-      importedCount++;
-    }
-
-    if (errorCount > 0) {
-      alert(`Hasil Impor Paste:\n• Berhasil: ${importedCount} varian\n• Gagal: ${errorCount} varian\n\n${errorDetails.slice(0, 5).join('\n')}`);
-    }
-
-    if (importedCount > 0) {
-      setSuccessToast(`Berhasil mengimpor ${importedCount} Varian dari salinan teks!`);
+      setParsedVariantsPreview([]);
+      setPreviewFileName(null);
       setPasteText('');
       setShowImportModal(false);
-      setTimeout(() => setSuccessToast(null), 5000);
+    } catch (err: any) {
+      console.error('Error saving variants:', err);
+      setImportError(`Gagal menyimpan varian: ${err.message || 'Terjadi kesalahan sistem'}`);
+    } finally {
+      setIsSubmittingImport(false);
     }
   };
 
@@ -2507,29 +2695,52 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
         </div>
       )}
 
-      {/* Modal: Import Excel & Drag & Drop */}
+      {/* Modal: Import Excel & Drag & Drop with Interactive Parsing Preview */}
       {showImportModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-2xl p-6 shadow-2xl text-slate-800 relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+          <div className={`bg-white border border-slate-200 rounded-3xl w-full ${parsedProductsPreview.length > 0 || parsedVariantsPreview.length > 0 ? 'max-w-5xl' : 'max-w-2xl'} p-6 shadow-2xl text-slate-800 relative max-h-[90vh] flex flex-col transition-all duration-300`}>
+            {/* Header Modal */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4 shrink-0">
               <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-purple-600" />
                 Import Data Produk & Varian (Excel / Spreadsheet)
               </h3>
               <button
                 type="button"
-                onClick={() => setShowImportModal(false)}
+                onClick={() => {
+                  setShowImportModal(false);
+                  setParsedProductsPreview([]);
+                  setParsedVariantsPreview([]);
+                  setPreviewFileName(null);
+                  setImportError(null);
+                }}
                 className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            {/* Error Banner */}
+            {importError && (
+              <div className="p-3 mb-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between text-xs text-rose-700 shrink-0">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                  <span className="font-medium">{importError}</span>
+                </div>
+                <button type="button" onClick={() => setImportError(null)} className="text-rose-400 hover:text-rose-600 cursor-pointer">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Tab Navigation: Master Produk Jadi vs Varian Produk */}
-            <div className="flex border-b border-slate-200 mb-4 gap-2">
+            <div className="flex border-b border-slate-200 mb-4 gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setImportTab('products')}
+                onClick={() => {
+                  setImportTab('products');
+                  setImportError(null);
+                }}
                 className={`pb-2.5 px-3 sm:px-4 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-2 ${
                   importTab === 'products'
                     ? 'border-purple-600 text-purple-700'
@@ -2538,10 +2749,18 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
               >
                 <PackageCheck className="w-4 h-4" />
                 <span>1. Master Produk Jadi</span>
+                {parsedProductsPreview.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-800 text-[10px] font-black">
+                    {parsedProductsPreview.length}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
-                onClick={() => setImportTab('variants')}
+                onClick={() => {
+                  setImportTab('variants');
+                  setImportError(null);
+                }}
                 className={`pb-2.5 px-3 sm:px-4 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-2 ${
                   importTab === 'variants'
                     ? 'border-emerald-600 text-emerald-700'
@@ -2550,211 +2769,550 @@ CREATE POLICY "Allow insert update delete on product_variants" ON public.product
               >
                 <Tag className="w-4 h-4" />
                 <span>2. Varian Produk (SKU / Kemasan)</span>
+                {parsedVariantsPreview.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black">
+                    {parsedVariantsPreview.length}
+                  </span>
+                )}
               </button>
             </div>
 
-            {importTab === 'products' ? (
-              <div className="space-y-4">
-                <div className="bg-purple-50/70 border border-purple-200/80 rounded-2xl p-4 text-xs text-purple-900 leading-relaxed">
-                  <span className="font-bold block mb-1">Panduan Import Master Produk Jadi:</span>
-                  • Data Master Produk tersimpan pada tabel database <code className="font-mono font-bold">products</code>.<br />
-                  • Kolom template: <code className="font-mono text-[11px]">Kode Produk (PJxxxx), Nama Produk, Kategori, Brand / Merk, Deskripsi, No Notifikasi BPOM</code>.<br />
-                  • Pastikan baris data memiliki Kode Produk unik.
-                </div>
-
-                {/* Download Template Master Produk */}
-                <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                  <div>
-                    <div className="text-xs font-bold text-slate-800">Template Master Produk Jadi</div>
-                    <div className="text-[10px] text-slate-500">Unduh file contoh Excel untuk master produk jadi.</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download Template</span>
-                  </button>
-                </div>
-
-                {/* Drag & Drop Zone Master Produk */}
-                <div
-                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                  onDragLeave={() => setIsDragging(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setIsDragging(false);
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) processExcelFile(file);
-                  }}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 ${
-                    isDragging ? 'border-purple-500 bg-purple-50/50 scale-[1.01]' : 'border-slate-300 hover:border-purple-400 bg-slate-50/50 hover:bg-purple-50/20'
-                  }`}
-                >
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) processExcelFile(file);
-                    }}
-                    accept=".xlsx, .xls, .csv"
-                    className="hidden"
-                  />
-                  <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center shadow-xs">
-                    <Upload className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-slate-800 mb-1">
-                      Drag & Drop file Excel Master Produk ke sini atau <span className="text-purple-600 underline">Browse File</span>
-                    </div>
-                    <div className="text-[10px] text-slate-400">Mendukung format .xlsx, .xls, atau .csv</div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Switcher Metode Import Varian */}
-                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => setImportMethod('file')}
-                    className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      importMethod === 'file'
-                        ? 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
-                    <span>Upload File Excel</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setImportMethod('paste')}
-                    className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                      importMethod === 'paste'
-                        ? 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Salin & Tempel (Paste Spreadsheet)</span>
-                  </button>
-                </div>
-
-                <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 text-xs text-emerald-900 leading-relaxed">
-                  <span className="font-bold block mb-1">Panduan Import Varian Produk:</span>
-                  • Varian akan otomatis dihubungkan ke Produk Jadi berdasarkan <code className="font-mono font-bold">Kode Produk Induk</code> (misal: <code className="font-mono">PJ0001</code>).<br />
-                  • Kolom berurutan: <code className="font-mono text-[11px]">Kode Produk Induk | Kode Varian/SKU | Nama Varian | Netto | Satuan | Barcode | Keterangan Kemasan</code>.<br />
-                  • Jika varian sudah ada pada kode produk yang sama, data varian akan diperbarui (update).
-                </div>
-
-                {importMethod === 'file' ? (
-                  <>
-                    {/* Download Template Varian */}
-                    <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
-                      <div>
-                        <div className="text-xs font-bold text-slate-800">Template Excel Varian Produk</div>
-                        <div className="text-[10px] text-slate-500">Unduh lembar kerja contoh untuk import varian.</div>
+            {/* Body Content */}
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              {importTab === 'products' ? (
+                <>
+                  {parsedProductsPreview.length === 0 ? (
+                    <div className="space-y-4">
+                      {/* Switcher Metode Import Produk */}
+                      <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setProductImportMethod('file')}
+                          className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                            productImportMethod === 'file'
+                              ? 'bg-white text-purple-700 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>Upload File Excel</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setProductImportMethod('paste')}
+                          className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                            productImportMethod === 'paste'
+                              ? 'bg-white text-purple-700 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Salin & Tempel (Paste Spreadsheet)</span>
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleDownloadVariantTemplate}
-                        className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Download Template Varian</span>
-                      </button>
-                    </div>
 
-                    {/* Drag & Drop Zone Varian */}
-                    <div
-                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                      onDragLeave={() => setIsDragging(false)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        setIsDragging(false);
-                        const file = e.dataTransfer.files?.[0];
-                        if (file) processVariantExcelFile(file);
-                      }}
-                      onClick={() => variantFileInputRef.current?.click()}
-                      className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 ${
-                        isDragging ? 'border-emerald-500 bg-emerald-50/50 scale-[1.01]' : 'border-slate-300 hover:border-emerald-400 bg-slate-50/50 hover:bg-emerald-50/20'
-                      }`}
-                    >
-                      <input
-                        type="file"
-                        ref={variantFileInputRef}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) processVariantExcelFile(file);
-                        }}
-                        accept=".xlsx, .xls, .csv"
-                        className="hidden"
-                      />
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs">
-                        <Upload className="w-6 h-6" />
+                      <div className="bg-purple-50/70 border border-purple-200/80 rounded-2xl p-4 text-xs text-purple-900 leading-relaxed">
+                        <span className="font-bold block mb-1">Panduan Import Master Produk Jadi:</span>
+                        • Data Master Produk tersimpan pada tabel database <code className="font-mono font-bold">products</code>.<br />
+                        • Kolom utama: <code className="font-mono text-[11px]">Kode Produk (PJxxxx), Nama Produk, Kategori, Brand / Merk, Satuan, Penyimpanan, No BPOM, Exp BPOM, Deskripsi</code>.<br />
+                        • Parameter uji mutu ruahan (bulk) & produk jadi otomatis dianalisis dari kolom parameter.
                       </div>
-                      <div>
-                        <div className="text-xs font-bold text-slate-800 mb-1">
-                          Drag & Drop file Excel Varian ke sini atau <span className="text-emerald-600 underline">Browse File</span>
+
+                      {productImportMethod === 'file' ? (
+                        <>
+                          {/* Download Template Master Produk */}
+                          <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                            <div>
+                              <div className="text-xs font-bold text-slate-800">Template Master Produk Jadi</div>
+                              <div className="text-[10px] text-slate-500">Unduh file contoh Excel untuk master produk jadi.</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleDownloadTemplate}
+                              className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Download Template</span>
+                            </button>
+                          </div>
+
+                          {/* Drag & Drop Zone Master Produk */}
+                          <div
+                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                            onDragLeave={() => setIsDragging(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDragging(false);
+                              const file = e.dataTransfer.files?.[0];
+                              if (file) processExcelFile(file);
+                            }}
+                            onClick={() => fileInputRef.current?.click()}
+                            className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 ${
+                              isDragging ? 'border-purple-500 bg-purple-50/50 scale-[1.01]' : 'border-slate-300 hover:border-purple-400 bg-slate-50/50 hover:bg-purple-50/20'
+                            }`}
+                          >
+                            <input
+                              type="file"
+                              ref={fileInputRef}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) processExcelFile(file);
+                              }}
+                              accept=".xlsx, .xls, .csv"
+                              className="hidden"
+                            />
+                            <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center shadow-xs">
+                              <Upload className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-slate-800 mb-1">
+                                Drag & Drop file Excel Master Produk ke sini atau <span className="text-purple-600 underline">Browse File</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400">Mendukung format .xlsx, .xls, atau .csv</div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between text-xs text-slate-600">
+                            <span className="font-semibold">Tempelkan baris data dari Excel / Google Sheets:</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const sample = `PJ0001\tFace Wash Tea Tree\tSkincare - Cleanser\tLarassanti\tpcs (Pieces)\tSuhu Ruang (15-25°C)\tNA18221200111\t2027-12-31\tPembersih wajah tea tree\nPJ0002\tBrightening Body Lotion\tBody Care\tLarassanti\tpcs (Pieces)\tSuhu Ruang (15-25°C)\tNA18221200222\t2027-12-31\tLotion pencerah kulit`;
+                                setProductPasteText(sample);
+                              }}
+                              className="text-[11px] text-purple-700 hover:underline font-bold cursor-pointer"
+                            >
+                              + Isi Contoh Data
+                            </button>
+                          </div>
+                          <textarea
+                            value={productPasteText}
+                            onChange={(e) => setProductPasteText(e.target.value)}
+                            placeholder={`PJ0001\tFace Wash Tea Tree\tSkincare - Cleanser\tLarassanti\tpcs (Pieces)\tSuhu Ruang (15-25°C)\tNA18221200111\t2027-12-31\tPembersih wajah tea tree`}
+                            rows={6}
+                            className="w-full p-3 font-mono text-xs border border-slate-300 rounded-2xl focus:outline-hidden focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 bg-slate-50"
+                          />
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-slate-400">
+                              Format kolom: Kode Produk (Tab) Nama (Tab) Kategori (Tab) Brand (Tab) Satuan (Tab) Penyimpanan (Tab) No BPOM (Tab) Exp BPOM (Tab) Deskripsi
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleProcessPastedProducts}
+                              disabled={!productPasteText.trim()}
+                              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                            >
+                              <Check className="w-4 h-4" />
+                              <span>Analisis & Pratinjau Produk</span>
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-[10px] text-slate-400">Mendukung format .xlsx, .xls, atau .csv</div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Pratinjau Hasil Parsing Master Produk */
+                    <div className="space-y-3 animate-fade-in">
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-purple-50/80 border border-purple-200 rounded-2xl">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
+                            <PackageCheck className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-extrabold text-purple-950 flex items-center gap-2">
+                              <span>Pratinjau Hasil Parsing Master Produk</span>
+                              <span className="px-2 py-0.5 rounded-full bg-purple-200 text-purple-900 text-[10px] font-black">
+                                {parsedProductsPreview.length} Produk Terdeteksi
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-purple-700">
+                              Sumber: <span className="font-semibold">{previewFileName || 'Excel / Spreadsheet'}</span>. Silakan periksa kolom sebelum disimpan ke database.
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParsedProductsPreview([]);
+                            setPreviewFileName(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-purple-300 bg-white hover:bg-purple-50 text-purple-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Ganti / Reset File</span>
+                        </button>
+                      </div>
+
+                      {/* Tabel Pratinjau Master Produk */}
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs max-h-[420px] overflow-y-auto">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 z-10">
+                            <tr className="text-slate-600 font-bold uppercase text-[10px]">
+                              <th className="p-2.5 pl-3 w-10 text-center">No</th>
+                              <th className="p-2.5">Kode Produk</th>
+                              <th className="p-2.5">Nama Produk Jadi</th>
+                              <th className="p-2.5">Kategori & Brand</th>
+                              <th className="p-2.5">No BPOM & Exp</th>
+                              <th className="p-2.5">Satuan & Kondisi Simpan</th>
+                              <th className="p-2.5">Spek Ruahan (QC)</th>
+                              <th className="p-2.5 pr-3">Spek Produk Jadi (QC)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {parsedProductsPreview.map((prod, idx) => (
+                              <tr key={idx} className="hover:bg-purple-50/20 transition-colors">
+                                <td className="p-2.5 pl-3 text-center font-mono font-bold text-slate-400 text-[10px]">{idx + 1}</td>
+                                <td className="p-2.5 font-mono font-bold text-purple-700">
+                                  <span className="bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded text-[10px]">
+                                    {prod.code}
+                                  </span>
+                                </td>
+                                <td className="p-2.5 font-bold text-slate-900 max-w-[200px]">
+                                  {prod.name}
+                                  {prod.description && (
+                                    <div className="text-[10px] font-normal text-slate-500 truncate">{prod.description}</div>
+                                  )}
+                                </td>
+                                <td className="p-2.5">
+                                  <div className="font-semibold text-slate-800">{prod.category}</div>
+                                  <div className="text-[10px] text-slate-400">{prod.brand}</div>
+                                </td>
+                                <td className="p-2.5">
+                                  <div className="font-mono text-slate-700">{prod.bpomNotificationNumber || '-'}</div>
+                                  <div className="text-[10px] text-slate-400">{prod.expNotificationDate || '-'}</div>
+                                </td>
+                                <td className="p-2.5">
+                                  <div className="font-medium text-slate-800">{prod.unit}</div>
+                                  <div className="text-[10px] text-slate-500 truncate max-w-[130px]">{prod.storageConditions}</div>
+                                </td>
+                                <td className="p-2.5">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-bold text-indigo-700">
+                                      {prod.qcParameters?.length || 0} Parameter
+                                    </span>
+                                    <div className="flex flex-wrap gap-1 max-w-[170px]">
+                                      {(prod.qcParameters || []).slice(0, 2).map((p, pIdx) => (
+                                        <span key={pIdx} className="bg-slate-100 border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[9px] truncate max-w-[150px]">
+                                          {p.name}: {p.specification}
+                                        </span>
+                                      ))}
+                                      {(prod.qcParameters?.length || 0) > 2 && (
+                                        <span className="text-[9px] text-purple-600 font-bold">
+                                          +{(prod.qcParameters?.length || 0) - 2} lainnya
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="p-2.5 pr-3">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-bold text-emerald-700">
+                                      {prod.finishedQcParameters?.length || 0} Parameter
+                                    </span>
+                                    <div className="flex flex-wrap gap-1 max-w-[170px]">
+                                      {(prod.finishedQcParameters || []).slice(0, 2).map((p, pIdx) => (
+                                        <span key={pIdx} className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] truncate max-w-[150px]">
+                                          {p.name}: {p.specification}
+                                        </span>
+                                      ))}
+                                      {(prod.finishedQcParameters?.length || 0) > 2 && (
+                                        <span className="text-[9px] text-emerald-600 font-bold">
+                                          +{(prod.finishedQcParameters?.length || 0) - 2} lainnya
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
-                  </>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs text-slate-600">
-                      <span className="font-semibold">Tempelkan baris data dari Excel / Google Sheets:</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const sample = `PJ0001\tPJ0001-30G\t30 g\t30\tg\t8993219584725\tBotol Dropper 30ml
-PJ0001\tPJ0001-60G\t60 g\t60\tg\t8993219584732\tBotol Pump 60ml`;
-                          setPasteText(sample);
-                        }}
-                        className="text-[11px] text-emerald-700 hover:underline font-bold cursor-pointer"
-                      >
-                        + Isi Contoh Data
-                      </button>
-                    </div>
-                    <textarea
-                      value={pasteText}
-                      onChange={(e) => setPasteText(e.target.value)}
-                      placeholder={`PJ0001\tPJ0001-30G\t30 g\t30\tg\t8993219584725\tBotol Dropper 30ml\nPJ0001\tPJ0001-60G\t60 g\t60\tg\t8993219584732\tBotol Pump 60ml`}
-                      rows={6}
-                      className="w-full p-3 font-mono text-xs border border-slate-300 rounded-2xl focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 bg-slate-50"
-                    />
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400">
-                        Pemisah kolom otomatis dideteksi (Tab atau titik koma).
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleProcessPastedVariants}
-                        disabled={!pasteText.trim()}
-                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span>Proses & Simpan Varian</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </>
+              ) : (
+                /* Tab 2: Varian Produk */
+                <>
+                  {parsedVariantsPreview.length === 0 ? (
+                    <div className="space-y-4">
+                      {/* Switcher Metode Import Varian */}
+                      <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setImportMethod('file')}
+                          className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                            importMethod === 'file'
+                              ? 'bg-white text-emerald-700 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>Upload File Excel</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImportMethod('paste')}
+                          className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                            importMethod === 'paste'
+                              ? 'bg-white text-emerald-700 shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Salin & Tempel (Paste Spreadsheet)</span>
+                        </button>
+                      </div>
 
-            <div className="flex items-center justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
+                      <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 text-xs text-emerald-900 leading-relaxed">
+                        <span className="font-bold block mb-1">Panduan Import Varian Produk:</span>
+                        • Varian akan otomatis dihubungkan ke Produk Jadi berdasarkan <code className="font-mono font-bold">Kode Produk Induk</code> (misal: <code className="font-mono">PJ0001</code>).<br />
+                        • Kolom berurutan: <code className="font-mono text-[11px]">Kode Produk Induk | Kode Varian/SKU | Nama Varian | Netto | Satuan | Barcode | Keterangan Kemasan</code>.<br />
+                        • Jika varian sudah ada pada kode produk yang sama, data varian akan diperbarui (update).
+                      </div>
+
+                      {importMethod === 'file' ? (
+                        <>
+                          {/* Download Template Varian */}
+                          <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                            <div>
+                              <div className="text-xs font-bold text-slate-800">Template Excel Varian Produk</div>
+                              <div className="text-[10px] text-slate-500">Unduh lembar kerja contoh untuk import varian.</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleDownloadVariantTemplate}
+                              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Download Template Varian</span>
+                            </button>
+                          </div>
+
+                          {/* Drag & Drop Zone Varian */}
+                          <div
+                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                            onDragLeave={() => setIsDragging(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDragging(false);
+                              const file = e.dataTransfer.files?.[0];
+                              if (file) processVariantExcelFile(file);
+                            }}
+                            onClick={() => variantFileInputRef.current?.click()}
+                            className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 ${
+                              isDragging ? 'border-emerald-500 bg-emerald-50/50 scale-[1.01]' : 'border-slate-300 hover:border-emerald-400 bg-slate-50/50 hover:bg-emerald-50/20'
+                            }`}
+                          >
+                            <input
+                              type="file"
+                              ref={variantFileInputRef}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) processVariantExcelFile(file);
+                              }}
+                              accept=".xlsx, .xls, .csv"
+                              className="hidden"
+                            />
+                            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-xs">
+                              <Upload className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-slate-800 mb-1">
+                                Drag & Drop file Excel Varian ke sini atau <span className="text-emerald-600 underline">Browse File</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400">Mendukung format .xlsx, .xls, atau .csv</div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between text-xs text-slate-600">
+                            <span className="font-semibold">Tempelkan baris data dari Excel / Google Sheets:</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const sample = `PJ0001\tPJ0001-30G\t30 g\t30\tg\t8993219584725\tBotol Dropper 30ml\nPJ0001\tPJ0001-60G\t60 g\t60\tg\t8993219584732\tBotol Pump 60ml`;
+                                setPasteText(sample);
+                              }}
+                              className="text-[11px] text-emerald-700 hover:underline font-bold cursor-pointer"
+                            >
+                              + Isi Contoh Data
+                            </button>
+                          </div>
+                          <textarea
+                            value={pasteText}
+                            onChange={(e) => setPasteText(e.target.value)}
+                            placeholder={`PJ0001\tPJ0001-30G\t30 g\t30\tg\t8993219584725\tBotol Dropper 30ml\nPJ0001\tPJ0001-60G\t60 g\t60\tg\t8993219584732\tBotol Pump 60ml`}
+                            rows={6}
+                            className="w-full p-3 font-mono text-xs border border-slate-300 rounded-2xl focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 bg-slate-50"
+                          />
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-slate-400">
+                              Pemisah kolom otomatis dideteksi (Tab atau titik koma).
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleProcessPastedVariants}
+                              disabled={!pasteText.trim()}
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                            >
+                              <Check className="w-4 h-4" />
+                              <span>Analisis & Pratinjau Varian</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Pratinjau Hasil Parsing Varian Produk */
+                    <div className="space-y-3 animate-fade-in">
+                      <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-emerald-50/80 border border-emerald-200 rounded-2xl">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
+                            <Tag className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-extrabold text-emerald-950 flex items-center gap-2">
+                              <span>Pratinjau Hasil Parsing Varian Produk</span>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 text-[10px] font-black">
+                                {parsedVariantsPreview.length} Varian Terdeteksi
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-emerald-700">
+                              Sumber: <span className="font-semibold">{previewFileName || 'Excel / Spreadsheet'}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setParsedVariantsPreview([]);
+                            setPreviewFileName(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl border border-emerald-300 bg-white hover:bg-emerald-50 text-emerald-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Ganti / Reset File</span>
+                        </button>
+                      </div>
+
+                      {/* Tabel Pratinjau Varian */}
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs max-h-[420px] overflow-y-auto">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 z-10">
+                            <tr className="text-slate-600 font-bold uppercase text-[10px]">
+                              <th className="p-2.5 pl-3 w-10 text-center">No</th>
+                              <th className="p-2.5">Produk Induk (Status)</th>
+                              <th className="p-2.5">Kode SKU / Varian</th>
+                              <th className="p-2.5">Nama Varian</th>
+                              <th className="p-2.5">Netto & Satuan</th>
+                              <th className="p-2.5">Barcode EAN-13</th>
+                              <th className="p-2.5 pr-3">Keterangan Kemasan</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {parsedVariantsPreview.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-emerald-50/20 transition-colors">
+                                <td className="p-2.5 pl-3 text-center font-mono font-bold text-slate-400 text-[10px]">{idx + 1}</td>
+                                <td className="p-2.5">
+                                  {item.parentFound ? (
+                                    <span className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-200 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold">
+                                      <Check className="w-3 h-3 text-emerald-600" />
+                                      {item.parentCode} - {item.parentName}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 text-rose-800 px-2 py-0.5 rounded text-[10px] font-bold">
+                                      <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                      {item.parentCode} (Induk Belum Terdaftar)
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-2.5 font-mono font-bold text-emerald-800">
+                                  {item.variant.sku}
+                                </td>
+                                <td className="p-2.5 font-bold text-slate-800">
+                                  {item.variant.variantName}
+                                </td>
+                                <td className="p-2.5 font-medium text-slate-700">
+                                  {item.variant.netVolumeGrams} {item.variant.packagingBom?.length ? '' : 'g'}
+                                </td>
+                                <td className="p-2.5 font-mono text-slate-600">
+                                  {item.variant.barcode || '-'}
+                                </td>
+                                <td className="p-2.5 pr-3 text-slate-500 text-[10px]">
+                                  {item.variant.description || '-'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Footer Modal Actions */}
+            <div className="flex items-center justify-between pt-4 mt-4 border-t border-slate-100 shrink-0">
               <button
                 type="button"
-                onClick={() => setShowImportModal(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                disabled={isSubmittingImport}
+                onClick={() => {
+                  setShowImportModal(false);
+                  setParsedProductsPreview([]);
+                  setParsedVariantsPreview([]);
+                  setPreviewFileName(null);
+                  setImportError(null);
+                }}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50"
               >
-                Tutup
+                {parsedProductsPreview.length > 0 || parsedVariantsPreview.length > 0 ? 'Batalkan' : 'Tutup'}
               </button>
+
+              {importTab === 'products' && parsedProductsPreview.length > 0 && (
+                <button
+                  type="button"
+                  disabled={isSubmittingImport}
+                  onClick={handleExecuteProductImport}
+                  className="px-6 py-2.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingImport ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Menyimpan {parsedProductsPreview.length} Produk ke Database...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Simpan & Import Semua Data ({parsedProductsPreview.length} Produk)</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {importTab === 'variants' && parsedVariantsPreview.length > 0 && (
+                <button
+                  type="button"
+                  disabled={isSubmittingImport}
+                  onClick={handleExecuteVariantImport}
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingImport ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Menyimpan {parsedVariantsPreview.length} Varian ke Database...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Simpan & Import Semua Varian ({parsedVariantsPreview.length} Varian)</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

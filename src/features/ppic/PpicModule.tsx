@@ -11,6 +11,9 @@ import { productService } from '../rnd/products/productService';
 import { Product } from '../../types';
 import { useAuth } from '../../core/auth/AuthContext';
 import { IpcBulkBatchRegisterModal } from '../quality/components/IpcBulkBatchRegisterModal';
+import { ProductionBatchDetailModal } from '../quality/components/ProductionBatchDetailModal';
+import { ProductionStepModal } from '../quality/components/ProductionStepModal';
+import { IpcAnalysisModal } from '../quality/components/IpcAnalysisModal';
 
 interface PpicModuleProps {
   activeSubTab?: string;
@@ -32,6 +35,8 @@ export const PpicModule: React.FC<PpicModuleProps> = ({
   
   // Modal State untuk Registrasi Batch Ruahan PPIC
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [selectedBatchForDetail, setSelectedBatchForDetail] = useState<IpcBulkTest | null>(null);
+  const [selectedStepKey, setSelectedStepKey] = useState<string | null>(null);
   const [registeredProducts, setRegisteredProducts] = useState<Product[]>([]);
 
   const loadData = async () => {
@@ -85,14 +90,14 @@ export const PpicModule: React.FC<PpicModuleProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-lg sm:text-xl font-black text-slate-900">
-                  PPIC & Penjadwalan Produksi CPKB
+                  Modul Produksi & Alur Manufaktur CPKB
                 </h1>
                 <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold">
-                  Master Batch Planning
+                  Batch Lifecycle Management
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Modul perencanaan produksi sediaan kosmetik, registrasi batch ruahan massal, kalkulasi MRP & penjadwalan line.
+                Modul produksi, penjadwalan line, pencatatan timestamp tahapan prosedural & paralel, serta pemantauan batch dari CPB hingga gudang.
               </p>
             </div>
           </div>
@@ -117,64 +122,12 @@ export const PpicModule: React.FC<PpicModuleProps> = ({
           </div>
         </div>
 
-        {/* KPI Summary Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-100">
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
-            <span className="text-[11px] font-bold text-slate-500">Total Batch Terdaftar</span>
-            <div className="text-xl font-black text-slate-900 mt-1">
-              {batches.length} <span className="text-xs font-semibold text-slate-400">Batch</span>
-            </div>
-          </div>
-          <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200">
-            <span className="text-[11px] font-bold text-purple-800">Sedang Uji Lab (IPC)</span>
-            <div className="text-xl font-black text-purple-900 mt-1">
-              {batches.filter((b) => b.status === 'TESTING' || b.status === 'RETEST').length} <span className="text-xs font-semibold text-purple-600">Proses</span>
-            </div>
-          </div>
-          <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-200">
-            <span className="text-[11px] font-bold text-blue-800">Menunggu Otorisasi QM</span>
-            <div className="text-xl font-black text-blue-900 mt-1">
-              {batches.filter((b) => b.status === 'AWAITING_QM').length} <span className="text-xs font-semibold text-blue-600">Review</span>
-            </div>
-          </div>
-          <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200">
-            <span className="text-[11px] font-bold text-emerald-800">Released (Siap Filling)</span>
-            <div className="text-xl font-black text-emerald-900 mt-1">
-              {batches.filter((b) => b.status === 'RELEASED' || b.status === 'RELEASED_DEVIATION').length} <span className="text-xs font-semibold text-emerald-600">Lulus</span>
-            </div>
-          </div>
-        </div>
+
       </div>
 
       {/* Main Content Area */}
       <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-4">
-        {/* Search & Filter Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-            <input
-              type="text"
-              placeholder="Cari nomor batch, produk, atau kode..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500 w-64"
-            />
-          </div>
 
-          <div className="flex items-center gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-semibold focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="ALL">Semua Status ({batches.length})</option>
-              <option value="TESTING">Dalam Uji Lab (TESTING)</option>
-              <option value="AWAITING_QM">Menunggu Otorisasi QM</option>
-              <option value="RELEASED">Released / Lulus</option>
-              <option value="REJECTED">Rejected / Ditolak</option>
-            </select>
-          </div>
-        </div>
 
         {/* Batch Table */}
         <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
@@ -199,8 +152,13 @@ export const PpicModule: React.FC<PpicModuleProps> = ({
                 </tr>
               ) : (
                 filteredBatches.map((b) => (
-                  <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="p-3.5 font-mono font-bold text-blue-800">{b.id}</td>
+                  <tr
+                    key={b.id}
+                    onClick={() => setSelectedBatchForDetail(b)}
+                    className="hover:bg-blue-50/50 transition-colors cursor-pointer group"
+                    title="Klik untuk melihat alur proses produksi & lifecycle batch"
+                  >
+                    <td className="p-3.5 font-mono font-bold text-blue-800 group-hover:underline">{b.id}</td>
                     <td className="p-3.5 font-mono font-bold text-slate-900">{b.batchNo}</td>
                     <td className="p-3.5">
                       <div className="font-bold text-slate-900">{b.productName}</div>
@@ -232,13 +190,46 @@ export const PpicModule: React.FC<PpicModuleProps> = ({
         </div>
       </div>
 
-      {/* Modal Registrasi Batch (Menggunakan modal yang sama dengan QC Lab agar konsisten) */}
+      {/* Modal Registrasi Batch */}
       <IpcBulkBatchRegisterModal
         isOpen={isRegisterModalOpen}
         onClose={() => setIsRegisterModalOpen(false)}
         onSuccess={(updatedList) => {
           setBatches(updatedList);
           setIsRegisterModalOpen(false);
+        }}
+      />
+
+      {/* Modal Detail Alur Proses Produksi & Batch Lifecycle */}
+      <ProductionBatchDetailModal
+        isOpen={!!selectedBatchForDetail}
+        onClose={() => setSelectedBatchForDetail(null)}
+        batch={selectedBatchForDetail}
+        onOpenStepModal={(stepKey, b) => {
+          setSelectedStepKey(stepKey);
+        }}
+      />
+
+      {/* Modal Pengujian Analisa Ruahan (IPC Bulk) */}
+      <IpcAnalysisModal
+        isOpen={selectedStepKey === 'IPC_BULK'}
+        onClose={() => setSelectedStepKey(null)}
+        batch={selectedBatchForDetail}
+        onSuccess={(updatedList) => {
+          setBatches(updatedList);
+          setSelectedStepKey(null);
+          loadData();
+        }}
+      />
+
+      {/* Modal Sub-Pekerjaan Tahap Produksi lainnya */}
+      <ProductionStepModal
+        isOpen={!!selectedStepKey && selectedStepKey !== 'IPC_BULK'}
+        onClose={() => setSelectedStepKey(null)}
+        stepKey={selectedStepKey}
+        batch={selectedBatchForDetail}
+        onSaveStepData={(stepKey, data) => {
+          console.log('Saved step:', stepKey, data);
         }}
       />
     </div>

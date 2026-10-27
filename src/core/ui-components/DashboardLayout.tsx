@@ -230,9 +230,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     },
     {
       id: 'ppic',
-      name: 'PPIC (Planning)',
-      shortName: 'PPIC',
-      description: 'Kalkulator Kebutuhan Material (MRP)',
+      name: 'Produksi & PPIC',
+      shortName: 'Produksi',
+      description: 'Manufaktur & Kalkulator MRP',
       icon: <CalendarDays className="w-4 h-4 text-blue-700" />,
       subItems: [
         { id: 'mrp', label: 'Kalkulasi MRP & Batching', icon: <FileSpreadsheet className="w-3.5 h-3.5" /> },

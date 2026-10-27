@@ -49,22 +49,10 @@ export const IpcInspectionReportPdfModal: React.FC<IpcInspectionReportPdfModalPr
       return;
     }
 
-    productService.getProducts().then((products) => {
-      const bCode = (batch.productCode || '').trim().toLowerCase();
-      const bName = (batch.productName || '').trim().toLowerCase();
-      const cleanBCode = (batch.productCode || '').replace(/\D/g, '');
-
-      const found = products.find((p) => {
-        const pCode = (p.productCode || p.code || '').trim().toLowerCase();
-        const pName = (p.name || '').trim().toLowerCase();
-        const cleanPCode = (p.productCode || p.code || '').replace(/\D/g, '');
-        return (
-          (bCode && (pCode === bCode || pCode.includes(bCode) || bCode.includes(pCode))) ||
-          (cleanBCode && cleanPCode && cleanBCode.length >= 3 && cleanBCode === cleanPCode) ||
-          (bName && (pName === bName || pName.includes(bName) || bName.includes(pName)))
-        );
-      });
-
+    productService.findProductWithParams({
+      code: batch.productCode,
+      name: batch.productName,
+    }).then((found) => {
       if (found) {
         setMatchedProduct(found);
       }
@@ -185,71 +173,83 @@ export const IpcInspectionReportPdfModal: React.FC<IpcInspectionReportPdfModalPr
   }> = [];
 
   if (batch.labParameters && batch.labParameters.length > 0) {
-    parameters = batch.labParameters;
-  } else if (matchedProduct && matchedProduct.qcParameters && matchedProduct.qcParameters.length > 0) {
-    parameters = matchedProduct.qcParameters.map((param: any, idx: number) => {
-      const paramName = param.parameterName || param.name || `Parameter ${idx + 1}`;
-      const specCondition = param.acceptanceCondition || param.specification || '-';
-      const unitSuffix = param.unit ? ` (${param.unit})` : '';
-      const lowerName = paramName.toLowerCase();
-
-      let resVal = specCondition;
-      if (lowerName.includes('ph') && batch.pH) {
-        resVal = String(batch.pH);
-      } else if ((lowerName.includes('viskos') || lowerName.includes('viscosity')) && batch.viscosity) {
-        resVal = `${batch.viscosity.toLocaleString('id-ID')} cPs`;
-      } else if ((lowerName.includes('density') || lowerName.includes('bobot jenis') || lowerName.includes('berat jenis')) && batch.gravity) {
-        resVal = `${batch.gravity} g/mL`;
-      } else if ((lowerName.includes('bentuk') || lowerName.includes('organo') || lowerName.includes('pemerian') || lowerName.includes('appearance')) && batch.appearance) {
-        resVal = batch.appearance;
+    parameters = batch.labParameters.filter((p: any) => {
+      if (p.category) {
+        return p.category === 'Ruahan (Bulk)';
       }
-
-      return {
-        id: param.id || `param-${idx + 1}`,
-        parameterName: `${paramName}${unitSuffix}`,
-        specification: specCondition,
-        resultValue: resVal,
-        isCompliant: true,
-      };
+      const lower = (p.parameterName || '').toLowerCase();
+      if (
+        lower.includes('kebocoran') ||
+        lower.includes('sealing') ||
+        lower.includes('torsi') ||
+        lower.includes('netto') ||
+        lower.includes('kemasan')
+      ) {
+        return false;
+      }
+      return true;
     });
   } else {
-    parameters = [
-      {
-        id: 'p1',
-        parameterName: 'Pemerian / Organoleptis',
-        specification: 'Sesuai Standar Mutu Fisik RnD',
-        resultValue: batch.appearance || 'Homogen, Sesuai Spesifikasi',
-        isCompliant: true,
-      },
-      {
-        id: 'p2',
-        parameterName: 'Derajat Keasaman (pH 25°C)',
-        specification: '5.50 - 6.50',
-        resultValue: batch.pH ? String(batch.pH) : '5.85',
-        isCompliant: true,
-      },
-      {
-        id: 'p3',
-        parameterName: 'Viskositas (cPs / Spindle 4)',
-        specification: '3.000 - 8.000 cPs',
-        resultValue: batch.viscosity ? `${batch.viscosity.toLocaleString('id-ID')} cPs` : '4.500 cPs',
-        isCompliant: true,
-      },
-      {
-        id: 'p4',
-        parameterName: 'Bobot Jenis / Density (g/mL)',
-        specification: '0.980 - 1.050 g/mL',
-        resultValue: batch.gravity ? `${batch.gravity} g/mL` : '1.012 g/mL',
-        isCompliant: true,
-      },
-      {
-        id: 'p5',
-        parameterName: 'Keseragaman & Homogenitas',
-        specification: 'Homogen Tanpa Partikel Asing',
-        resultValue: 'Homogen Sempurna',
-        isCompliant: true,
-      },
-    ];
+    const ruahanSpecs = matchedProduct?.qcParameters || [];
+
+    if (ruahanSpecs.length > 0) {
+      parameters = ruahanSpecs.map((param: any, idx: number) => {
+        const paramName = param.parameterName || param.name || `Parameter ${idx + 1}`;
+        const specCondition = param.acceptanceCondition || param.specification || '-';
+        const unitSuffix = param.unit ? ` (${param.unit})` : '';
+        const lowerName = paramName.toLowerCase();
+
+        let resVal = specCondition;
+        if (lowerName.includes('ph') && batch.pH) {
+          resVal = String(batch.pH);
+        } else if ((lowerName.includes('viskos') || lowerName.includes('viscosity')) && batch.viscosity) {
+          resVal = `${batch.viscosity.toLocaleString('id-ID')} cPs`;
+        } else if ((lowerName.includes('density') || lowerName.includes('bobot jenis') || lowerName.includes('berat jenis')) && batch.gravity) {
+          resVal = `${batch.gravity} g/mL`;
+        } else if ((lowerName.includes('bentuk') || lowerName.includes('organo') || lowerName.includes('pemerian') || lowerName.includes('appearance')) && batch.appearance) {
+          resVal = batch.appearance;
+        }
+
+        return {
+          id: param.id || `param-${idx + 1}`,
+          parameterName: `${paramName}${unitSuffix}`,
+          specification: specCondition,
+          resultValue: resVal,
+          isCompliant: true,
+        };
+      });
+    } else {
+      parameters = [
+        {
+          id: 'p1',
+          parameterName: 'pH Sediaan (Bulk)',
+          specification: '6.0 - 6.8',
+          resultValue: batch.pH ? String(batch.pH) : '6.4',
+          isCompliant: true,
+        },
+        {
+          id: 'p2',
+          parameterName: 'Viskositas Adonan (cPs)',
+          specification: '3,500 - 4,500 cPs',
+          resultValue: batch.viscosity ? `${batch.viscosity.toLocaleString('id-ID')} cPs` : '4,000 cPs',
+          isCompliant: true,
+        },
+        {
+          id: 'p3',
+          parameterName: 'Bobot Jenis (Density) (g/ml)',
+          specification: '0.98 - 1.02 g/ml',
+          resultValue: batch.gravity ? `${batch.gravity} g/ml` : '1.00 g/ml',
+          isCompliant: true,
+        },
+        {
+          id: 'p4',
+          parameterName: 'Pemerian / Organoleptis',
+          specification: 'Homogen, Sesuai Standar RnD',
+          resultValue: batch.appearance || 'Homogen, Sesuai Standar RnD',
+          isCompliant: true,
+        },
+      ];
+    }
   }
 
   return createPortal(

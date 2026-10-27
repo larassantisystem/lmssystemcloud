@@ -263,17 +263,28 @@ export const productService = {
 
           if (productIds.length > 0) {
             try {
-              // Optimized: ONLY query lightweight variant fields for products on this page
-              const { data: varData, error: varErr } = await supabase
-                .from('product_variants')
-                .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, bpom_number, barcode, created_at')
-                .in('product_id', productIds);
+              const CHUNK_SIZE = 40;
+              const chunks: string[][] = [];
+              for (let i = 0; i < productIds.length; i += CHUNK_SIZE) {
+                chunks.push(productIds.slice(i, i + CHUNK_SIZE));
+              }
 
-              if (!varErr && varData) {
-                for (const v of varData) {
-                  const pid = v.product_id;
-                  if (!variantsByProductId[pid]) variantsByProductId[pid] = [];
-                  variantsByProductId[pid].push(v);
+              const variantResults = await Promise.all(
+                chunks.map((chunk) =>
+                  supabase
+                    .from('product_variants')
+                    .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, bpom_number, barcode, created_at')
+                    .in('product_id', chunk)
+                )
+              );
+
+              for (const res of variantResults) {
+                if (!res.error && res.data) {
+                  for (const v of res.data) {
+                    const pid = v.product_id;
+                    if (!variantsByProductId[pid]) variantsByProductId[pid] = [];
+                    variantsByProductId[pid].push(v);
+                  }
                 }
               }
             } catch (vErr) {
@@ -418,19 +429,34 @@ export const productService = {
         return [];
       }
 
-      // Fetch variants for loaded products only
+      // Fetch variants for loaded products only (chunked to prevent SQLite too many variables error)
       const pIds = prods.map((p: any) => p.id);
       let allVariants: any[] = [];
-      try {
-        const { data: variantsData, error: varErr } = await supabase
-          .from('product_variants')
-          .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, packaging_bom, bpom_number, barcode, description, created_at')
-          .in('product_id', pIds);
-        if (!varErr && variantsData) {
-          allVariants = variantsData;
+      if (pIds.length > 0) {
+        try {
+          const CHUNK_SIZE = 40;
+          const chunks: string[][] = [];
+          for (let i = 0; i < pIds.length; i += CHUNK_SIZE) {
+            chunks.push(pIds.slice(i, i + CHUNK_SIZE));
+          }
+
+          const variantResults = await Promise.all(
+            chunks.map((chunk) =>
+              supabase
+                .from('product_variants')
+                .select('id, product_id, sku, variant_name, status, net_volume_grams, bulk_formula_code, packaging_bom, bpom_number, barcode, description, created_at')
+                .in('product_id', chunk)
+            )
+          );
+
+          for (const res of variantResults) {
+            if (!res.error && res.data) {
+              allVariants.push(...res.data);
+            }
+          }
+        } catch (e) {
+          console.warn('[productService] error loading variants:', e);
         }
-      } catch (e) {
-        console.warn('[productService] error loading variants:', e);
       }
 
       const variantsByProductId: Record<string, any[]> = {};
@@ -585,6 +611,69 @@ export const productService = {
       console.warn(`[productService] Exception saat mengambil parameter on-demand:`, err);
       return inMemoryProducts.find(p => p.id === productId) || null;
     }
+  },
+
+  /**
+   * Cari produk berdasarkan kode atau nama, dan ambil seluruh parameter QC lengkap (ruahan & produk jadi)
+   */
+  findProductWithParams: async (identifier: { code?: string; name?: string }): Promise<Product | null> => {
+    const rawCode = (identifier.code || '').trim().toLowerCase();
+    const rawName = (identifier.name || '').trim().toLowerCase();
+    const cleanCode = (identifier.code || '').replace(/\D/g, '');
+
+    // 1. Coba cari di inMemoryProducts dulu
+    const products = await productService.getProducts(false);
+    const matched = products.find(p => {
+      const pCode = (p.productCode || p.code || '').trim().toLowerCase();
+      const pName = (p.name || '').trim().toLowerCase();
+      const cleanPCode = (p.productCode || p.code || '').replace(/\D/g, '');
+      const matchVariant = p.variants?.some(v => {
+        const vCode = (v.sku || v.variantCode || '').trim().toLowerCase();
+        const vName = (v.variantName || '').trim().toLowerCase();
+        return (rawCode && vCode === rawCode) || (rawName && vName === rawName);
+      });
+
+      return (
+        (rawCode && (pCode === rawCode || pCode.includes(rawCode) || rawCode.includes(pCode))) ||
+        (cleanCode && cleanPCode && cleanCode.length >= 3 && cleanCode === cleanPCode) ||
+        (rawName && (pName === rawName || pName.includes(rawName) || rawName.includes(pName))) ||
+        matchVariant
+      );
+    });
+
+    if (matched) {
+      return await productService.getProductWithParams(matched.id);
+    }
+
+    // 2. Jika tidak ketemu di memori, query langsung ke database D1/Supabase
+    if (isSupabaseConfigured && supabase) {
+      try {
+        if (identifier.code) {
+          const { data } = await supabase
+            .from('products')
+            .select('*')
+            .or(`product_code.eq.${identifier.code},code.eq.${identifier.code}`)
+            .limit(1);
+          if (data && data.length > 0) {
+            return await productService.getProductWithParams(data[0].id);
+          }
+        }
+        if (identifier.name) {
+          const { data } = await supabase
+            .from('products')
+            .select('*')
+            .ilike('name', `%${identifier.name}%`)
+            .limit(1);
+          if (data && data.length > 0) {
+            return await productService.getProductWithParams(data[0].id);
+          }
+        }
+      } catch (e) {
+        console.warn('[productService] error in findProductWithParams query:', e);
+      }
+    }
+
+    return null;
   },
 
   /**

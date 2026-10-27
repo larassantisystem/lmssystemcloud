@@ -44,6 +44,7 @@ export interface IpcParameterRow {
   specification: string;
   resultValue: string;
   isCompliant: boolean;
+  category?: 'Ruahan (Bulk)' | 'Produk Jadi (Kemas)';
 }
 
 export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
@@ -56,6 +57,8 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
 
   const [productSpec, setProductSpec] = useState<Product | null>(null);
   const [parameters, setParameters] = useState<IpcParameterRow[]>([]);
+  const [allProductsCatalog, setAllProductsCatalog] = useState<Product[]>([]);
+  const [isSyncingSpecs, setIsSyncingSpecs] = useState(false);
   const [staffNotes, setStaffNotes] = useState<string>('');
   
   // Modals for PDF Report and Status Labels
@@ -65,7 +68,7 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
 
   // Signature Modal state
   const [showSignatureModal, setShowSignatureModal] = useState(false);
-  const [actionType, setActionType] = useState<'SUBMIT_ANALYST' | 'RELEASE_QM' | 'REJECT_QM' | 'RETURN_ANALYST'>('SUBMIT_ANALYST');
+  const [actionType, setActionType] = useState<'SUBMIT_ANALYST' | 'RELEASE_QM' | 'REJECT_QM' | 'RETURN_ANALYST' | 'RELEASE_DEVIATION' | 'REVERT_RELEASE'>('SUBMIT_ANALYST');
   const [staffPassword, setStaffPassword] = useState('');
   const [returnReason, setReturnReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -89,99 +92,117 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
 
   const inputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
 
-  useEffect(() => {
-    if (batch) {
-      // Fetch product specification from productService
-      productService.getProducts().then((products) => {
-        const batchCode = (batch.productCode || '').trim().toLowerCase();
-        const batchName = (batch.productName || '').trim().toLowerCase();
-        const cleanBCode = (batch.productCode || '').replace(/\D/g, '');
+  const syncWithMasterProduct = async (productToUse?: Product | null, forceReloadSpecs = false) => {
+    if (!batch) return;
+    setIsSyncingSpecs(true);
+    try {
+      // 1. Ambil katalog produk terkini dari Supabase/D1
+      const productsList = await productService.getProducts(true);
+      setAllProductsCatalog(productsList || []);
 
-        const found = products.find((p) => {
-          const pCode = (p.productCode || p.code || '').trim().toLowerCase();
-          const pName = (p.name || '').trim().toLowerCase();
-          const cleanPCode = (p.productCode || p.code || '').replace(/\D/g, '');
-          return (
-            (batchCode && (pCode === batchCode || pCode.includes(batchCode) || batchCode.includes(pCode))) ||
-            (cleanBCode && cleanPCode && cleanBCode.length >= 3 && cleanBCode === cleanPCode) ||
-            (batchName && (pName === batchName || pName.includes(batchName) || batchName.includes(pName)))
-          );
+      let targetProduct: Product | null = productToUse || null;
+      if (!targetProduct) {
+        targetProduct = await productService.findProductWithParams({
+          code: batch.productCode,
+          name: batch.productName,
+        });
+      }
+
+      setProductSpec(targetProduct || null);
+
+      // 2. Kumpulkan parameter QC dari Master Produk (HANYA Sediaan Ruahan / Bulk)
+      const ruahanList: any[] = targetProduct?.qcParameters || [];
+
+      if (ruahanList.length > 0) {
+        const dynamicParams: IpcParameterRow[] = ruahanList.map((param: any, idx: number) => {
+          const paramName = param.parameterName || param.name || `Parameter ${idx + 1}`;
+          const specCondition = param.acceptanceCondition || param.specification || '-';
+          const unitSuffix = param.unit ? ` (${param.unit})` : '';
+          const fullName = `${paramName}${unitSuffix}`;
+
+          // Cek apakah sudah pernah ada hasil pengujian sebelumnya
+          const existingParam = !forceReloadSpecs
+            ? batch.labParameters?.find(
+                (lp) => lp.id === param.id || lp.parameterName.toLowerCase().includes(paramName.toLowerCase())
+              )
+            : null;
+
+          const lowerName = paramName.toLowerCase();
+          let initialValue = specCondition;
+
+          if (existingParam && existingParam.resultValue) {
+            initialValue = existingParam.resultValue;
+          } else if (lowerName.includes('ph') && batch.pH) {
+            initialValue = String(batch.pH);
+          } else if ((lowerName.includes('viskos') || lowerName.includes('viscosity')) && batch.viscosity) {
+            initialValue = `${batch.viscosity.toLocaleString('id-ID')} cPs`;
+          } else if ((lowerName.includes('density') || lowerName.includes('bobot jenis') || lowerName.includes('berat jenis')) && batch.gravity) {
+            initialValue = `${batch.gravity} g/mL`;
+          } else if ((lowerName.includes('bentuk') || lowerName.includes('organo') || lowerName.includes('pemerian') || lowerName.includes('appearance')) && batch.appearance) {
+            initialValue = batch.appearance;
+          }
+
+          const initialCompliant = existingParam ? existingParam.isCompliant : true;
+
+          return {
+            id: param.id || `param-${idx + 1}`,
+            parameterName: fullName,
+            specification: specCondition,
+            resultValue: initialValue,
+            isCompliant: initialCompliant,
+            category: 'Ruahan (Bulk)',
+          };
         });
 
-        if (found) {
-          setProductSpec(found);
-        } else {
-          setProductSpec(null);
-        }
+        setParameters(dynamicParams);
+      } else {
+        // Fallback resmi standar RnD Master Produk Jadi khusus Sediaan Ruahan (Bulk)
+        const fallbackParams: IpcParameterRow[] = [
+          {
+            id: 'p-bulk-1',
+            parameterName: 'pH Sediaan (Bulk)',
+            specification: '6.0 - 6.8',
+            resultValue: batch.pH ? String(batch.pH) : '6.4',
+            isCompliant: true,
+            category: 'Ruahan (Bulk)',
+          },
+          {
+            id: 'p-bulk-2',
+            parameterName: 'Viskositas Adonan (cPs)',
+            specification: '3,500 - 4,500 cPs',
+            resultValue: batch.viscosity ? `${batch.viscosity.toLocaleString('id-ID')} cPs` : '4,000 cPs',
+            isCompliant: true,
+            category: 'Ruahan (Bulk)',
+          },
+          {
+            id: 'p-bulk-3',
+            parameterName: 'Bobot Jenis (Density) (g/ml)',
+            specification: '0.98 - 1.02 g/ml',
+            resultValue: batch.gravity ? `${batch.gravity} g/ml` : '1.00 g/ml',
+            isCompliant: true,
+            category: 'Ruahan (Bulk)',
+          },
+          {
+            id: 'p-bulk-4',
+            parameterName: 'Pemerian / Organoleptis',
+            specification: 'Homogen, Sesuai Standar RnD',
+            resultValue: batch.appearance || 'Homogen, Sesuai Standar RnD',
+            isCompliant: true,
+            category: 'Ruahan (Bulk)',
+          },
+        ];
+        setParameters(fallbackParams);
+      }
+    } catch (err) {
+      console.error('[IpcAnalysisModal] Gagal memuat parameter master produk:', err);
+    } finally {
+      setIsSyncingSpecs(false);
+    }
+  };
 
-        // DYNAMIC PARAMETERS: Directly map from Supabase Product qc_parameters
-        if (found && found.qcParameters && found.qcParameters.length > 0) {
-          const dynamicParams: IpcParameterRow[] = found.qcParameters.map((param, idx) => {
-            const paramName = param.parameterName || param.name || `Parameter ${idx + 1}`;
-            const specCondition = param.acceptanceCondition || param.specification || '-';
-            const unitSuffix = param.unit ? ` (${param.unit})` : '';
-
-            // Check if there is already a saved lab parameter in batch
-            const existingParam = batch.labParameters?.find(
-              (lp) => lp.id === param.id || lp.parameterName.toLowerCase().includes(paramName.toLowerCase())
-            );
-
-            const lowerName = paramName.toLowerCase();
-            let initialValue = specCondition;
-
-            if (existingParam) {
-              initialValue = existingParam.resultValue;
-            } else if (lowerName.includes('ph') && batch.pH) {
-              initialValue = String(batch.pH);
-            } else if ((lowerName.includes('viskos') || lowerName.includes('viscosity')) && batch.viscosity) {
-              initialValue = `${batch.viscosity.toLocaleString('id-ID')} cPs`;
-            } else if ((lowerName.includes('density') || lowerName.includes('bobot jenis') || lowerName.includes('berat jenis')) && batch.gravity) {
-              initialValue = `${batch.gravity} g/mL`;
-            } else if ((lowerName.includes('bentuk') || lowerName.includes('organo') || lowerName.includes('pemerian') || lowerName.includes('appearance')) && batch.appearance) {
-              initialValue = batch.appearance;
-            }
-
-            const initialCompliant = existingParam ? existingParam.isCompliant : true;
-
-            return {
-              id: param.id || `param-${idx + 1}`,
-              parameterName: `${paramName}${unitSuffix}`,
-              specification: specCondition,
-              resultValue: initialValue,
-              isCompliant: initialCompliant,
-            };
-          });
-
-          setParameters(dynamicParams);
-        } else {
-          // Fallback only if product has not configured qc_parameters in Supabase
-          const fallbackParams: IpcParameterRow[] = [
-            {
-              id: 'p1',
-              parameterName: 'Pemerian / Organoleptis',
-              specification: 'Emulsi/Gel Homogen, Sesuai Standar',
-              resultValue: batch.appearance || 'Emulsi/Gel Homogen, Sesuai Standar',
-              isCompliant: true,
-            },
-            {
-              id: 'p2',
-              parameterName: 'pH Sediaan (25°C)',
-              specification: '5.0 - 7.5',
-              resultValue: batch.pH ? String(batch.pH) : '6.0',
-              isCompliant: true,
-            },
-            {
-              id: 'p3',
-              parameterName: 'Viskositas Sediaan (cPs)',
-              specification: '3,000 - 18,000 cPs',
-              resultValue: batch.viscosity ? `${batch.viscosity.toLocaleString('id-ID')} cPs` : '4,500 cPs',
-              isCompliant: true,
-            },
-          ];
-          setParameters(fallbackParams);
-        }
-      });
-
+  useEffect(() => {
+    if (isOpen && batch) {
+      syncWithMasterProduct();
       setStaffNotes(batch.rejectionReason || '');
       setShowSignatureModal(false);
       setStaffPassword('');
@@ -189,7 +210,7 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
       setErrorMessage('');
       setFocusedEmptyParamId(null);
     }
-  }, [batch]);
+  }, [isOpen, batch]);
 
   if (!isOpen || !batch) return null;
 
@@ -215,13 +236,13 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
     );
   };
 
-  const handleOpenSignaturePrompt = (type: 'SUBMIT_ANALYST' | 'RELEASE_QM' | 'REJECT_QM' | 'RETURN_ANALYST') => {
+  const handleOpenSignaturePrompt = (type: 'SUBMIT_ANALYST' | 'RELEASE_QM' | 'REJECT_QM' | 'RETURN_ANALYST' | 'RELEASE_DEVIATION' | 'REVERT_RELEASE') => {
     // Quality Manager authorization enforcement
-    if (type === 'RELEASE_QM' || type === 'REJECT_QM' || type === 'RETURN_ANALYST') {
+    if (type === 'RELEASE_QM' || type === 'REJECT_QM' || type === 'RETURN_ANALYST' || type === 'RELEASE_DEVIATION' || type === 'REVERT_RELEASE') {
       const isQualityManager =
-        user?.role === 'manager' ||
+        (user?.role as string) === 'manager' ||
         user?.role === 'admin' ||
-        (user?.department === 'quality' && (user?.role === 'manager' || user?.role === 'supervisor'));
+        (user?.department === 'quality' && ((user?.role as string) === 'manager' || user?.role === 'supervisor'));
 
       if (!isQualityManager) {
         setErrorMessage('Akses Dibatasi: Otorisasi & Rilis (Release) sediaan ruahan hanya dapat disetujui oleh Quality Manager.');
@@ -294,12 +315,14 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
 
       if (actionType === 'SUBMIT_ANALYST') {
         newStatus = 'AWAITING_QM';
+        const signerName = user?.name || batch.analyst || 'Staf QC Lab';
+        const signerNik = user?.nik || '-';
         staffSig = {
-          signerName: user?.name || batch.analyst || 'Staf QC Lab',
-          signerNik: user?.nik || '-',
+          signerName,
+          signerNik,
           signerPosition: getUserPositionTitle(user, 'Staf Analis Lab QC'),
           signedAt: nowFormatted,
-          signatureHash: generateDigitalSignatureHash(user?.nik || 'STAFF', user?.name || 'Staf QC', 'ANALYZE_IPC', batch.batchNo),
+          signatureHash: generateDigitalSignatureHash(signerNik !== '-' ? signerNik : 'STAFF', signerName, 'ANALYZE_IPC', batch.batchNo),
         };
       } else if (actionType === 'RELEASE_QM') {
         newStatus = 'RELEASED';
@@ -333,6 +356,9 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
       } else if (actionType === 'RETURN_ANALYST') {
         newStatus = 'RETEST';
         reasonText = returnReason || staffNotes || 'Dikembalikan oleh QM untuk pengujian ulang';
+      } else if (actionType === 'REVERT_RELEASE') {
+        newStatus = 'TESTING';
+        reasonText = returnReason || staffNotes || 'Dibatalkan rilis oleh QM untuk koreksi hasil analisa';
       }
 
       // Generate dates if not set
@@ -351,7 +377,9 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
         gravity: gravRow && gravRow.resultValue ? parseFloat(gravRow.resultValue.replace(',', '.')) || batch.gravity : batch.gravity,
         appearance: appRow && appRow.resultValue ? appRow.resultValue : batch.appearance,
         status: newStatus,
-        analyst: actionType === 'SUBMIT_ANALYST' ? (user?.name || batch.analyst || 'Staf QC Lab (IPC)') : batch.analyst,
+        analyst: actionType === 'SUBMIT_ANALYST'
+          ? (user?.name || staffSig?.signerName || 'Staf QC Lab')
+          : (staffSig?.signerName || batch.staffSignature?.signerName || batch.analyst || user?.name || 'Staf QC Lab'),
         labParameters: parameters,
         staffSignature: staffSig,
         qmSignature: qmSig,
@@ -411,11 +439,40 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Material Identitas */}
             <div className="col-span-2 bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-2">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="text-slate-500 font-medium">Spesifikasi Produk Jadi (RnD)</span>
-                <span className="font-mono font-bold text-purple-900 bg-purple-50 px-2.5 py-0.5 rounded-md border border-purple-200">
-                  {batch.productCode || productSpec?.productCode || 'CPKB-SPEC'}
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 font-medium">Spesifikasi Master Produk Jadi:</span>
+                  {productSpec ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      Tersinkron: {productSpec.name} ({parameters.length} Param)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full">
+                      <AlertCircle className="w-3 h-3 text-amber-600" />
+                      Standar Default CPKB RnD
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+
+
+                  <button
+                    type="button"
+                    disabled={isReadOnly || isSyncingSpecs}
+                    onClick={() => syncWithMasterProduct(productSpec, true)}
+                    className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-100/70 hover:bg-purple-200 border border-purple-300 px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-all shadow-2xs"
+                    title="Sinkronkan ulang seluruh parameter langsung dari Master Produk Jadi"
+                  >
+                    <RotateCcw className={`w-3 h-3 ${isSyncingSpecs ? 'animate-spin' : ''}`} />
+                    <span>{isSyncingSpecs ? 'Sinkron...' : 'Sync Master'}</span>
+                  </button>
+
+                  <span className="font-mono font-bold text-purple-900 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200">
+                    {batch.productCode || productSpec?.productCode || productSpec?.code || 'CPKB-SPEC'}
+                  </span>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <div>
@@ -451,14 +508,27 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block">Formula Code / Kategori:</span>
-                  <span className="font-mono text-slate-700">
-                    {productSpec?.variants?.[0]?.bulkFormulaCode || 'FORM-CPKB-01'} ({productSpec?.category || 'Cosmetics'})
+                  <span className="text-slate-500 block">Kode Produk:</span>
+                  <span className="font-mono font-bold text-purple-900 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded text-xs inline-block">
+                    {batch.productCode || productSpec?.productCode || productSpec?.code || '-'}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Analis QC:</span>
-                  <span className="font-bold text-slate-800">{batch.analyst || user?.name}</span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-slate-800">
+                      {batch.staffSignature?.signerName || (batch.status === 'TESTING' || batch.status === 'RETEST' ? (user?.name || batch.analyst || 'Staf QC Lab') : (batch.analyst || user?.name || 'Staf QC Lab'))}
+                    </span>
+                    {batch.staffSignature?.signerName ? (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded border border-emerald-300">
+                        ✓ Ditandatangani Digital
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 font-medium italic">
+                        (User: {user?.name || 'QC'})
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -530,48 +600,35 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
             </div>
           )}
 
-          {/* AI Smart Assessor Card */}
-          <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-200 rounded-xl p-4 shadow-xs">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-purple-700 text-white rounded-lg shrink-0 mt-0.5">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <div className="grow space-y-1">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-purple-950 uppercase tracking-wider">
-                    AI Smart Assessor (Analisa Deviasi & Kepatuhan Spesifikasi Produk Jadi)
-                  </h4>
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                      allCompliant
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                        : 'bg-rose-100 text-rose-800 border border-rose-300'
-                    }`}
-                  >
-                    {allCompliant ? '100% Sesuai Spesifikasi' : 'Ada Deviasi Parameter'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-700 leading-relaxed font-medium">
-                  {allCompliant
-                    ? `Seluruh parameter pengujian adonan ruahan batch ${batch.batchNo} memenuhi standar spesifikasi produk jadi (${batch.productName}). Sediaan homogen, pH dan viskositas berada dalam rentang wajar.`
-                    : `Terdapat parameter yang tidak memenuhi syarat (Out of Spec) pada pengujian batch ${batch.batchNo}. Periksa penyesuaian (*adjusting*) pH atau viskositas sebelum otorisasi.`}
-                </p>
-              </div>
-            </div>
-          </div>
+
 
           {/* Lab Parameters Table */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                <span>Checklist & Hasil Pengujian Laboratorium</span>
-                <span className="text-slate-400 font-normal">({parameters.length} Parameter Spesifikasi Produk)</span>
-              </h4>
-              {isReadOnly && (
-                <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                  🔒 Mode Read-Only (Hasil Uji Terkunci)
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <span>Checklist & Hasil Pengujian Spesifikasi Ruahan</span>
+                  <span className="text-purple-700 font-semibold bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                    {parameters.length} Parameter Sediaan Ruahan (Bulk)
+                  </span>
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Parameter disinkronkan khusus spesifikasi Sediaan Ruahan (Bulk) dari Master Produk Jadi.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-purple-800 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-200 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-purple-600"></span>
+                  Khusus Spek Sediaan Ruahan
                 </span>
-              )}
+
+                {isReadOnly && (
+                  <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                    🔒 Mode Read-Only (Hasil Uji Terkunci)
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
@@ -579,8 +636,8 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
                 <thead>
                   <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                     <th className="p-3 w-10 text-center">No</th>
-                    <th className="p-3 w-1/4">Parameter Pengujian</th>
-                    <th className="p-3 w-1/3">Spesifikasi Produk Jadi (RnD)</th>
+                    <th className="p-3 w-1/4">Parameter Pengujian (Master RnD)</th>
+                    <th className="p-3 w-1/3">Spesifikasi Standar Penerimaan</th>
                     <th className="p-3 w-1/3">Hasil Analisa Lab <span className="text-red-500">*</span></th>
                     <th className="p-3 w-28 text-center">Evaluasi</th>
                   </tr>
@@ -599,8 +656,15 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
                       >
                         <td className="p-3 text-center text-slate-400 font-mono">{idx + 1}</td>
                         <td className="p-3">
-                          <div className="font-bold text-slate-800 leading-snug">
-                            {param.parameterName}
+                          <div className="space-y-1">
+                            <div className="font-bold text-slate-800 leading-snug">
+                              {param.parameterName}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                Ruahan (Bulk)
+                              </span>
+                            </div>
                           </div>
                         </td>
                         <td className="p-3">
@@ -688,6 +752,52 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
               }`}
             />
           </div>
+
+          {/* Jejak Audit Tanda Tangan Digital CPKB jika sudah ditandatangani */}
+          {(batch.staffSignature || batch.qmSignature) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {batch.staffSignature && (
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 text-xs space-y-1 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Tanda Tangan Analis QC (IPC):
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded font-semibold">
+                      {batch.staffSignature.signedAt}
+                    </span>
+                  </div>
+                  <p className="font-bold text-slate-900 text-xs">{batch.staffSignature.signerName}</p>
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    {batch.staffSignature.signerPosition} • NIK: {batch.staffSignature.signerNik}
+                  </p>
+                  <p className="font-mono text-[9px] text-slate-400 truncate" title={batch.staffSignature.signatureHash}>
+                    Hash: {batch.staffSignature.signatureHash}
+                  </p>
+                </div>
+              )}
+              {batch.qmSignature && (
+                <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-3 text-xs space-y-1 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-purple-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-purple-600" />
+                      Otorisasi Quality Manager:
+                    </span>
+                    <span className="text-[10px] font-mono text-purple-800 bg-purple-100/80 px-1.5 py-0.5 rounded font-semibold">
+                      {batch.qmSignature.signedAt}
+                    </span>
+                  </div>
+                  <p className="font-bold text-slate-900 text-xs">{batch.qmSignature.signerName}</p>
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    {batch.qmSignature.signerPosition} • NIK: {batch.qmSignature.signerNik}
+                  </p>
+                  <p className="font-mono text-[9px] text-slate-400 truncate" title={batch.qmSignature.signatureHash}>
+                    Hash: {batch.qmSignature.signatureHash}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Modal Footer */}
@@ -756,6 +866,17 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
                   <span>Otorisasi & Rilis (RELEASED)</span>
                 </button>
               </div>
+            )}
+
+            {batch.status === 'RELEASED' && (
+              <button
+                type="button"
+                onClick={() => handleOpenSignaturePrompt('REVERT_RELEASE')}
+                className="bg-slate-700 hover:bg-slate-800 text-white text-xs font-extrabold px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Batalkan Release</span>
+              </button>
             )}
           </div>
         </div>

@@ -1,27 +1,31 @@
-# Rencana Penyesuaian Modul Deviasi Berdasarkan 12 Tahapan SOP Resmi
+# Revised Implementation Plan - Modul Alur Proses Produksi & Batch Lifecycle Interaktif (CPKB)
 
 ## Tujuan
-Menyelaraskan alur kerja (workflow), tab navigasi, dan penanggung jawab di Modul Deviasi dengan 12 tahapan SOP resmi:
-1. Pelaporan dan registrasi penyimpangan (Departemen pelapor / QA)
-2. Uraian kejadian dan persyaratan yang tidak terpenuhi (Departemen pelapor)
-3. Tindakan segera dan pengamanan produk/proses (Departemen terkait)
-4. Klasifikasi kategori dan tingkat risiko (QA)
-5. Kajian departemen terkait sesuai kategori penyimpangan (Departemen yang ditunjuk)
-6. Investigasi dan pengumpulan bukti (Departemen terkait bersama QA)
-7. Analisis akar penyebab (Departemen penyebab / terkait bersama QA)
-8. Penilaian dampak dan keputusan terhadap produk (QA bersama departemen terkait)
-9. Penyusunan dan persetujuan CAPA (Departemen penanggung jawab dan QA)
-10. Pelaksanaan CAPA (PIC yang ditetapkan)
-11. Verifikasi efektivitas CAPA (QA dan departemen terkait)
-12. Kesimpulan dan penutupan laporan (QA / pejabat berwenang)
+Mengembangkan modal detail batch produksi di Modul PPIC/Produksi dengan tahapan alur proses yang disempurnakan sesuai standar industri kosmetika (CPKB):
+1. **Cetak Catatan Pengolahan Bets (Print Batch Record)**
+2. **Penimbangan & Penyerahan Bahan Baku (Raw Material Dispensing)**
+3. **Pencampuran & Pengolahan Ruahan (Mixing / Bulk Production)**
+4. **Analisa Pengujian Ruahan (IPC Bulk Analysis)**
+5. **Pengisian Sediaan ke Wadah Primer (Filling / Pengisian)**
+6. **Penyerahan & Persiapan Bahan Kemas (Packaging Material Handover / Dispensing)**
+7. **Pengemasan Sekunder & Pelabelan (Secondary Packaging & Labeling)**
+8. **Pengujian Mutu Produk Jadi & Kemas (Finished Goods QC Inspection)**
+9. **Pelulusan Mutu oleh Quality Manager (QM Release)**
+10. **Serah Terima & Penerimaan Stok di Gudang (Warehouse Receipt)**
 
-## Rencana Perubahan
-1. **Pembaruan Workflow / Tahapan di UI (`DeviationDetailModal.tsx`)**:
-   - Menata ulang tab atau tahapan alur deviasi agar mencerminkan 12 tahapan SOP dengan jelas beserta penanggung jawab (PIC) di setiap tahapnya.
-   - Menyediakan status pelacakan (tracking status) untuk setiap tahapan (Belum Dimulai, Sedang Berjalan, Selesai/Diverifikasi).
+## Fitur Utama
+- **Prosedural & Paralel:** Setiap tahap memiliki urutan logis (prosedural), namun mendukung pengaturan mode paralel untuk proses tertentu (misal: persiapan kemasan berjalan bersamaan dengan analisa ruahan).
+- **Timestamp Tracking:** Pencatatan otomatis waktu mulai (*start timestamp*) dan waktu selesai (*finish timestamp*) untuk setiap tahap pengerjaan.
+- **Form Detail Pekerjaan:** Klik pada masing-masing tahapan membuka pop-up form operasional (misalnya form pengujian lab ruahan, form cetak batch record, form verifikasi gudang, dll).
 
-2. **Penyempurnaan Struktur Data (`deviationTypes.ts` & `deviationService.ts`)**:
-   - Mendukung pencatatan status per tahapan SOP (1 sampai 12) beserta PIC dan catatan verifikasinya.
+## Rencana Komponen & File
+1. **`src/features/quality/components/ProductionBatchDetailModal.tsx`**:
+   - Timeline interaktif 10 tahapan produksi dengan status pengerjaan, waktu mulai/selesai, tombol aksi modal sub-pekerjaan, serta indikator prosedural/paralel.
+2. **`src/features/quality/components/ProductionStepModal.tsx`**:
+   - Sub-modal dinamis untuk mengeksekusi aksi di tiap tahap.
+3. **Pembaruan `PpicModule.tsx`**:
+   - Integrasi klik nomor batch ke modal detail produksi komprehensif.
 
-3. **Verifikasi Build & Linting**:
-   - Memastikan kompilasi sukses dan bersih dari error.
+## Verifikasi
+- Kompilasi build dengan `compile_applet`.
+- Linting kode.

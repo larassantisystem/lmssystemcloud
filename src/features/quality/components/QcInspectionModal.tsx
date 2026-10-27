@@ -229,6 +229,24 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
     );
   };
 
+  const handleRevertRelease = async () => {
+    if (!report || !onSubmitStaffAnalysis) return;
+    
+    // Konfirmasi pembatalan rilis
+    if (!window.confirm('Apakah Anda yakin ingin membatalkan rilis (Revert Release) laporan ini? Status akan kembali ke "In Progress" untuk pengeditan.')) {
+      return;
+    }
+
+    try {
+      // Panggil fungsi untuk update status di backend (asumsi onSubmitStaffAnalysis bisa handle status lain atau tambah method baru)
+      // Untuk sementara, kita panggil fungsi yang ada dengan modifikasi staffDecision menjadi 'REJECT' (atau sesuaikan dengan backend Anda)
+      // CATATAN: Implementasi backend untuk 'REVERT' mungkin perlu ditambah di service terkait.
+      alert('Fitur Pembatalan Rilis sedang dalam tahap pengembangan di sisi Backend/Service.');
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Gagal membatalkan rilis');
+    }
+  };
+
   const handleOpenSignaturePrompt = () => {
     // Validate: Check for incomplete parameter results
     const emptyIndex = parameters.findIndex((p) => !p.resultValue || !p.resultValue.trim());
@@ -819,21 +837,33 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
           </div>
 
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200/70 rounded-xl transition-colors"
-            >
-              Batal
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenSignaturePrompt}
-              className="px-5 py-2 text-sm font-bold text-white bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 active:scale-98 rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <FileCheck2 className="w-4 h-4" />
-              Selesaikan Analisa & Ajukan ke Manager
-            </button>
+            <div className="flex items-center gap-3">
+              {report.status === 'PASSED' && (
+                <button
+                  type="button"
+                  onClick={handleRevertRelease}
+                  className="px-4 py-2 text-sm font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Batalkan Release
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200/70 rounded-xl transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenSignaturePrompt}
+                className="px-5 py-2 text-sm font-bold text-white bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 active:scale-98 rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <FileCheck2 className="w-4 h-4" />
+                Selesaikan Analisa & Ajukan ke Manager
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -719,7 +719,47 @@ class D1QueryBuilder {
   /**
    * Execute SELECT query
    */
-  private async executeSelect() {
+  private async executeSelect(): Promise<{ data: any[] | null; count?: number; error: any }> {
+    // Safeguard: Check if any IN clause exceeds 40 variables (Cloudflare D1 / SQLite parameter limit)
+    const largeInIndex = this.whereClauses.findIndex(
+      (w) => w.op === 'IN' && Array.isArray(w.val) && w.val.length > 40
+    );
+
+    if (largeInIndex !== -1 && !this.headOnly) {
+      const targetClause = this.whereClauses[largeInIndex];
+      const allVals = targetClause.val as any[];
+      const CHUNK_SIZE = 40;
+      const chunks: any[][] = [];
+      for (let i = 0; i < allVals.length; i += CHUNK_SIZE) {
+        chunks.push(allVals.slice(i, i + CHUNK_SIZE));
+      }
+
+      const subPromises = chunks.map((chunk) => {
+        const sub = new D1QueryBuilder(this.client, this.table);
+        sub.selectCols = this.selectCols;
+        sub.orderClauses = [...this.orderClauses];
+        sub.whereClauses = this.whereClauses.map((w, idx) =>
+          idx === largeInIndex ? { ...w, val: chunk } : w
+        );
+        return sub.executeSelect();
+      });
+
+      const resList = await Promise.all(subPromises);
+      const merged: any[] = [];
+      for (const r of resList) {
+        if (r.error) return { data: null, error: r.error };
+        if (r.data) merged.push(...r.data);
+      }
+
+      let finalData = merged;
+      if (this.offsetVal !== undefined || this.limitVal !== undefined) {
+        const off = this.offsetVal || 0;
+        const lim = this.limitVal !== undefined ? this.limitVal : finalData.length;
+        finalData = finalData.slice(off, off + lim);
+      }
+      return { data: finalData, error: null };
+    }
+
     const params: any[] = [];
     let wherePart = '';
 
@@ -835,12 +875,12 @@ class D1QueryBuilder {
       select: (_cols?: string) => ({
         single: async () => {
           const res = await executeInsert();
-          if (res.error) return { data: null, error: res.error };
+          if (res.error || !res.data) return { data: null, error: res.error };
           return { data: res.data[0] || null, error: null };
         },
         maybeSingle: async () => {
           const res = await executeInsert();
-          if (res.error) return { data: null, error: res.error };
+          if (res.error || !res.data) return { data: null, error: res.error };
           return { data: res.data[0] || null, error: null };
         },
         then: (resolve: any, reject: any) => executeInsert().then(resolve, reject),

@@ -523,48 +523,7 @@ export const IpcBulkBatchRegisterModal: React.FC<IpcBulkBatchRegisterModalProps>
                 />
               </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-extrabold text-slate-700 block">
-                    Pilih Dari Master Produk (Supabase)
-                  </label>
-                  <span className="text-[10px] text-purple-700 font-semibold">
-                    {registeredProducts.length} Produk Terdaftar
-                  </span>
-                </div>
-                <select
-                  value={manualForm.productCode || ''}
-                  onChange={(e) => {
-                    const selectedCode = e.target.value;
-                    const prod = registeredProducts.find(
-                      (p) => (p.productCode || p.code) === selectedCode
-                    );
-                    if (prod) {
-                      setManualForm({
-                        ...manualForm,
-                        productCode: prod.productCode || prod.code,
-                        productName: prod.name,
-                      });
-                    } else {
-                      setManualForm({
-                        ...manualForm,
-                        productCode: selectedCode,
-                      });
-                    }
-                  }}
-                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:ring-2 focus:ring-purple-500"
-                >
-                  <option value="">-- Pilih Kode / Nama Produk --</option>
-                  {registeredProducts.map((p) => {
-                    const code = p.productCode || p.code;
-                    return (
-                      <option key={p.id || code} value={code}>
-                        {code} - {p.name}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
+
 
               <div className="space-y-1">
                 <label className="text-[11px] font-extrabold text-slate-700 block">

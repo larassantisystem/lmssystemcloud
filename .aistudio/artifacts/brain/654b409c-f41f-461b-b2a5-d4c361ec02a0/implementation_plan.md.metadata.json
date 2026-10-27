@@ -1,6 +1,6 @@
 {
-  "summary": "Rencana penyesuaian Modul Deviasi sesuai 12 tahapan SOP resmi perusahaan (dari Pelaporan hingga Kesimpulan dan Penutupan).",
-  "updatedAt": "2026-10-19T06:45:18.355615380Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Revised implementation plan incorporating separated filling and packaging steps, separated QM release and warehouse receipt, packaging material handover step, procedural/parallel step configuration, and start/finish timestamp tracking.",
+  "updatedAt":  "2026-10-27T02:05:33.519146856Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

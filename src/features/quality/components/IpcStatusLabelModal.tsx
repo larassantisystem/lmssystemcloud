@@ -323,9 +323,9 @@ export const IpcStatusLabelModal: React.FC<IpcStatusLabelModalProps> = ({
                       <div className="col-span-2">
                         <span className="text-slate-500 block text-[10px] uppercase font-bold">Nama Produk:</span>
                         <span className="font-bold text-slate-900 text-xs">{batch.productName}</span>
-                        {batch.productCode && (
+                        {(batch.productCode || productSpec?.productCode || productSpec?.code) && (
                           <span className="font-mono text-[10px] text-purple-700 block mt-0.5">
-                            Kode: {batch.productCode}
+                            Kode: {batch.productCode || productSpec?.productCode || productSpec?.code}
                           </span>
                         )}
                       </div>
@@ -393,7 +393,7 @@ export const IpcStatusLabelModal: React.FC<IpcStatusLabelModalProps> = ({
                 <div className="bg-slate-50 border-t border-slate-200 px-5 py-2 flex items-center justify-between text-[10px]">
                   <div className="text-slate-600">
                     <span className="text-slate-400">Analis QC: </span>
-                    <strong>{batch.analyst || 'Staf QC Lab'}</strong>
+                    <strong>{batch.staffSignature?.signerName || batch.analyst || 'Staf QC Lab'}</strong>
                   </div>
                   <div className="text-slate-600">
                     <span className="text-slate-400">{isReleased ? 'Diotorisasi Oleh: ' : 'Penanggung Jawab: '}</span>

@@ -1064,6 +1064,16 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
                           <FileText className="w-3.5 h-3.5" />
                           Laporan PDF
                         </button>
+                        {item.status === 'PASSED' && (
+                          <button
+                            onClick={() => setRevertingReport(item)}
+                            title="Batalkan Release"
+                            className={`inline-flex items-center gap-1.5 ${isCompactMode ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5'} bg-slate-700 hover:bg-slate-800 active:scale-98 text-white rounded-lg font-bold shadow-xs cursor-pointer`}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Batalkan Release
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
