@@ -15,6 +15,7 @@ import {
   Eye,
   Cloud,
   RotateCcw,
+  RefreshCw,
 } from 'lucide-react';
 import { QcInspectionReport, QcParameterResult } from '../types/qcTypes';
 import { analyzeLabResults } from '../utils/qcAiAssistant';
@@ -70,6 +71,8 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [focusedEmptyParamId, setFocusedEmptyParamId] = useState<string | null>(null);
   const [showCoaViewer, setShowCoaViewer] = useState(false);
+  const [isSyncingMaster, setIsSyncingMaster] = useState(false);
+  const [masterSyncInfo, setMasterSyncInfo] = useState<string | null>(null);
 
   useEscapeKey(() => {
     if (showCoaViewer) {
@@ -92,69 +95,127 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   // References to input elements for auto-focusing on incomplete fields
   const inputRefs = useRef<{ [key: string]: HTMLInputElement | null }>({});
 
+  const syncWithMasterData = async (forceOverwrite: boolean = false) => {
+    if (!report) return;
+    setIsSyncingMaster(true);
+    try {
+      const isPackaging = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((report.materialType || '').trim().toLowerCase()) ||
+        (report.materialType || '').toLowerCase().includes('kemas') ||
+        (report.materialType || '').toLowerCase().includes('pack');
+      const cleanCode = (report.materialCode || '').trim().toLowerCase();
+      const cleanName = (report.materialName || '').trim().toLowerCase();
+
+      let masterParams: Array<{ name: string; specification: string }> = [];
+
+      if (isPackaging) {
+        const pms = await packagingService.getPackagingMaterials();
+        const matched = pms.find((pm) => {
+          const pmCode = (pm.code || '').trim().toLowerCase();
+          const pmName = (pm.name || '').trim().toLowerCase();
+          return (cleanCode && pmCode === cleanCode) ||
+                 (cleanName && (pmName === cleanName || pmName.includes(cleanName) || cleanName.includes(pmName)));
+        });
+        if (matched?.qcParameters && matched.qcParameters.length > 0) {
+          masterParams = matched.qcParameters
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+            }));
+        }
+      } else {
+        const rms = await materialService.getMaterials();
+        const matched = rms.find((rm) => {
+          const rmCode = (rm.code || '').trim().toLowerCase();
+          const rmName = (rm.name || '').trim().toLowerCase();
+          return (cleanCode && rmCode === cleanCode) ||
+                 (cleanName && (rmName === cleanName || rmName.includes(cleanName) || cleanName.includes(rmName)));
+        });
+        if (matched?.qcParameters && matched.qcParameters.length > 0) {
+          masterParams = matched.qcParameters
+            .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
+            .map((p) => ({
+              name: (p.name || p.parameterName || 'Parameter').trim(),
+              specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
+            }));
+        }
+      }
+
+      if (masterParams.length > 0) {
+        setParameters((prevParams) => {
+          if (!prevParams || prevParams.length === 0) {
+            return masterParams.map((mp, idx) => ({
+              id: `param-${Date.now()}-${idx}`,
+              parameterName: mp.name,
+              specification: mp.specification,
+              resultValue: '',
+              isCompliant: true,
+            }));
+          }
+
+          let hasChanges = false;
+          const updated = masterParams.map((mp, idx) => {
+            const existing = prevParams.find(
+              (p) => (p.parameterName || '').trim().toLowerCase() === mp.name.toLowerCase()
+            );
+
+            if (existing) {
+              const specNeedsUpdate =
+                forceOverwrite ||
+                !existing.specification ||
+                existing.specification.trim() === '-' ||
+                existing.specification.trim() === '' ||
+                existing.specification.trim() !== mp.specification.trim();
+
+              if (specNeedsUpdate) {
+                hasChanges = true;
+                return {
+                  ...existing,
+                  parameterName: mp.name,
+                  specification: mp.specification,
+                };
+              }
+              return existing;
+            } else {
+              hasChanges = true;
+              return {
+                id: `param-${Date.now()}-${idx}`,
+                parameterName: mp.name,
+                specification: mp.specification,
+                resultValue: '',
+                isCompliant: true,
+              };
+            }
+          });
+
+          if (hasChanges || forceOverwrite) {
+            setMasterSyncInfo(`Spesifikasi disinkronkan dari Master Data (${masterParams.length} parameter).`);
+            return updated;
+          } else if (forceOverwrite) {
+            setMasterSyncInfo('Spesifikasi sudah sesuai dengan Master Data.');
+          }
+          return prevParams;
+        });
+      } else if (forceOverwrite) {
+        setMasterSyncInfo('Parameter master data tidak ditemukan.');
+      }
+    } catch (err) {
+      console.error('Gagal menyinkronkan parameter master:', err);
+    } finally {
+      setIsSyncingMaster(false);
+    }
+  };
+
   useEffect(() => {
     if (report) {
       const initialParams = report.parameters && report.parameters.length > 0
         ? JSON.parse(JSON.stringify(report.parameters))
         : [];
       setParameters(initialParams);
+      setMasterSyncInfo(null);
 
-      // If parameters list is empty in the report, immediately resolve from Master Data (Bagian B)
-      if (initialParams.length === 0) {
-        const isPackaging = ['packaging', 'pm', 'bahan kemas', 'packaging_material', 'bk'].includes((report.materialType || '').trim().toLowerCase()) ||
-          (report.materialType || '').toLowerCase().includes('kemas') ||
-          (report.materialType || '').toLowerCase().includes('pack');
-        const cleanCode = (report.materialCode || '').trim().toLowerCase();
-        const cleanName = (report.materialName || '').trim().toLowerCase();
-
-        if (isPackaging) {
-          packagingService.getPackagingMaterials().then((pms) => {
-            const matched = pms.find((pm) => {
-              const pmCode = (pm.code || '').trim().toLowerCase();
-              const pmName = (pm.name || '').trim().toLowerCase();
-              return (cleanCode && pmCode === cleanCode) ||
-                     (cleanName && (pmName === cleanName || pmName.includes(cleanName) || cleanName.includes(pmName)));
-            });
-            if (matched?.qcParameters && matched.qcParameters.length > 0) {
-              const mapped = matched.qcParameters
-                .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
-                .map((p, idx) => ({
-                  id: `param-${Date.now()}-${idx}`,
-                  parameterName: (p.name || p.parameterName || 'Parameter').trim(),
-                  specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
-                  resultValue: '',
-                  isCompliant: true,
-                }));
-              if (mapped.length > 0) {
-                setParameters(mapped);
-              }
-            }
-          }).catch(console.error);
-        } else {
-          materialService.getMaterials().then((rms) => {
-            const matched = rms.find((rm) => {
-              const rmCode = (rm.code || '').trim().toLowerCase();
-              const rmName = (rm.name || '').trim().toLowerCase();
-              return (cleanCode && rmCode === cleanCode) ||
-                     (cleanName && (rmName === cleanName || rmName.includes(cleanName) || cleanName.includes(rmName)));
-            });
-            if (matched?.qcParameters && matched.qcParameters.length > 0) {
-              const mapped = matched.qcParameters
-                .filter((p) => (p.name && p.name.trim()) || (p.parameterName && p.parameterName.trim()))
-                .map((p, idx) => ({
-                  id: `param-${Date.now()}-${idx}`,
-                  parameterName: (p.name || p.parameterName || 'Parameter').trim(),
-                  specification: p.specification || p.acceptanceCondition || 'Sesuai Standar Spesifikasi Mutu',
-                  resultValue: '',
-                  isCompliant: true,
-                }));
-              if (mapped.length > 0) {
-                setParameters(mapped);
-              }
-            }
-          }).catch(console.error);
-        }
-      }
+      // Otomatis sinkronkan spesifikasi dengan Master Data jika kosong atau spesifikasi belum sesuai
+      syncWithMasterData(false);
 
       setStaffDecision(report.staffDecision || 'RELEASE');
       setStaffNotes(report.staffNotes || '');
@@ -654,12 +715,29 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
 
           {/* Lab Parameters Table */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
                 <span>Checklist & Hasil Pengujian Laboratorium</span>
                 <span className="text-slate-400 font-normal">({parameters.length} Parameter Standar)</span>
               </h4>
+              <button
+                type="button"
+                onClick={() => syncWithMasterData(true)}
+                disabled={isSyncingMaster}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors shadow-2xs disabled:opacity-50"
+                title="Tarik dan sesuaikan spesifikasi terbaru dari Master Data RnD"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingMaster ? 'animate-spin' : ''}`} />
+                <span>{isSyncingMaster ? 'Menyinkronkan...' : 'Sinkronkan Spesifikasi Master'}</span>
+              </button>
             </div>
+
+            {masterSyncInfo && (
+              <div className="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>{masterSyncInfo}</span>
+              </div>
+            )}
 
             <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
               <table className="w-full text-left border-collapse text-xs">

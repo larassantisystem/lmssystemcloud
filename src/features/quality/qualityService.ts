@@ -512,17 +512,25 @@ export const qualityService = {
           const currentParams = existingReport.parameters || [];
           const isParameterCountMismatch = currentParams.length !== effectiveParamTemplates.length;
           const isNameMismatch = effectiveParamTemplates.some(
-            (ep, idx) => currentParams[idx]?.parameterName !== ep.name
+            (ep, idx) => (currentParams[idx]?.parameterName || '').trim().toLowerCase() !== ep.name.trim().toLowerCase()
           );
+          const isSpecMismatch = effectiveParamTemplates.some((ep) => {
+            const cp = currentParams.find((p) => (p.parameterName || '').trim().toLowerCase() === ep.name.trim().toLowerCase());
+            return !cp || !cp.specification || cp.specification === '-' || cp.specification.trim() !== ep.spec.trim();
+          });
 
-          if (isParameterCountMismatch || isNameMismatch || currentParams.length === 0) {
-            existingReport.parameters = effectiveParamTemplates.map((item, idx) => ({
-              id: `param-${Date.now()}-${idx}`,
-              parameterName: item.name,
-              specification: item.spec,
-              resultValue: currentParams.find(p => p.parameterName === item.name)?.resultValue || '',
-              isCompliant: currentParams.find(p => p.parameterName === item.name)?.isCompliant ?? true,
-            }));
+          if (isParameterCountMismatch || isNameMismatch || isSpecMismatch || currentParams.length === 0) {
+            existingReport.parameters = effectiveParamTemplates.map((item, idx) => {
+              const matchedP = currentParams.find((p) => (p.parameterName || '').trim().toLowerCase() === item.name.trim().toLowerCase());
+              return {
+                id: matchedP?.id || `param-${Date.now()}-${idx}`,
+                parameterName: item.name,
+                specification: item.spec,
+                resultValue: matchedP?.resultValue || '',
+                isCompliant: matchedP?.isCompliant ?? true,
+                notes: matchedP?.notes || '',
+              };
+            });
             needsUpdate = true;
           }
         }
@@ -1295,8 +1303,8 @@ export const qualityService = {
 
     let updatedCount = 0;
     const targetReports = reportId
-      ? reports.filter((r) => r.id === reportId)
-      : reports.filter((r) => r.status === 'QUARANTINE');
+      ? reports.filter((r) => r.id === reportId || r.grnNumber === reportId)
+      : reports.filter((r) => r.status === 'QUARANTINE' || r.status === 'QUALITY_CONTROL_PROCESS');
 
     for (const rep of targetReports) {
       let masterParams: Array<{ name: string; spec: string }> = [];
