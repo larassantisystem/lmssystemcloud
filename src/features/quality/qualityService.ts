@@ -16,7 +16,7 @@ import { isQualityManager } from '../../core/auth/permissionGuard';
 import { UserProfile } from '../../types';
 import { soundService } from '../../core/utils/soundService';
 import { toggleContainerSampled } from './utils/samplingUtils';
-import { syncQcReportToSupabase, packGrnNotes, unpackGrnNotes } from '../../core/utils/qcStorageSync';
+import { syncQcReportToSupabase, syncQcReportToD1, packGrnNotes, unpackGrnNotes } from '../../core/utils/qcStorageSync';
 
 const QC_REPORTS_STORAGE_KEY = 'lsm_qc_reports_v2';
 const QC_NOTIFICATIONS_STORAGE_KEY = 'lsm_qc_notifications_v2';
@@ -36,10 +36,14 @@ function findMatchingQcReport(reports: QcInspectionReport[], targetId?: string |
     r.id === clean ||
     r.grnId === clean ||
     r.grnNumber === clean ||
+    r.lotInternalNumber === clean ||
+    r.reportNumber === clean ||
     r.id === `qc-rep-${clean}` ||
     r.grnId === withoutPrefix ||
     r.grnNumber === withoutPrefix ||
-    (r.grnNumber && r.grnNumber.toLowerCase() === clean.toLowerCase())
+    (r.grnNumber && r.grnNumber.toLowerCase() === clean.toLowerCase()) ||
+    (r.lotInternalNumber && r.lotInternalNumber.toLowerCase() === clean.toLowerCase()) ||
+    (r.reportNumber && r.reportNumber.toLowerCase() === clean.toLowerCase())
   );
 }
 
@@ -66,11 +70,148 @@ export const qualityService = {
    * Get a single QC Inspection Report by ID, GRN Number, or Internal Lot Number
    */
   getReportById: async (reportId: string): Promise<QcInspectionReport | null> => {
-    let report = findMatchingQcReport(memoryReports, reportId);
-    if (report) return report;
+    let report = findMatchingQcReport(memoryReports, reportId) || undefined;
+    if (!report) {
+      const allReports = await qualityService.getReports();
+      report = findMatchingQcReport(allReports, reportId) || undefined;
+    }
 
-    const allReports = await qualityService.getReports();
-    report = findMatchingQcReport(allReports, reportId);
+    // Always attempt to fetch from physical D1 table first for persistent parameters & signatures
+    try {
+      const res = await fetch(`/api/qc?id=${encodeURIComponent(reportId)}`);
+      if (res.ok) {
+        const json = await res.json();
+        const d1Row = json.data;
+        if (d1Row) {
+          let parsedParams = [];
+          try {
+            parsedParams = typeof d1Row.parameters_json === 'string' ? JSON.parse(d1Row.parameters_json) : (d1Row.parameters_json || []);
+          } catch {}
+          let d1StaffSig = undefined;
+          try {
+            d1StaffSig = typeof d1Row.staff_signature_json === 'string' ? JSON.parse(d1Row.staff_signature_json) : d1Row.staff_signature_json;
+            if (d1StaffSig && Object.keys(d1StaffSig).length === 0) d1StaffSig = undefined;
+          } catch {}
+          let d1QmSig = undefined;
+          try {
+            d1QmSig = typeof d1Row.qm_signature_json === 'string' ? JSON.parse(d1Row.qm_signature_json) : d1Row.qm_signature_json;
+            if (d1QmSig && Object.keys(d1QmSig).length === 0) d1QmSig = undefined;
+          } catch {}
+
+          if (!report) {
+            report = {
+              id: d1Row.id,
+              grnId: d1Row.grn_id,
+              grnNumber: d1Row.grn_number,
+              lotInternalNumber: d1Row.lot_internal_number,
+              reportNumber: d1Row.report_number || d1Row.lot_internal_number,
+              materialCode: d1Row.material_code,
+              materialName: d1Row.material_name,
+              materialType: d1Row.material_type || 'raw',
+              batchNumberVendor: d1Row.batch_number || '',
+              quantityReceived: Number(d1Row.quantity_received || 0),
+              unit: d1Row.unit || 'kg',
+              containerCount: Number(d1Row.container_count || 1),
+              containerType: d1Row.container_type || 'Drum / Zak',
+              manufacturer: d1Row.manufacturer || '',
+              distributor: d1Row.distributor || '',
+              receivedDate: d1Row.received_date || '',
+              expiryDate: d1Row.expiry_date || '',
+              retestDate: d1Row.retest_date || '',
+              storageConditions: d1Row.storage_conditions || '',
+              status: d1Row.status,
+              parameters: parsedParams,
+              samplingInfo: {},
+              staffDecision: d1Row.staff_decision,
+              staffNotes: d1Row.staff_notes || '',
+              staffSignature: d1StaffSig,
+              qmDecision: d1Row.qm_decision,
+              qmNotes: d1Row.qm_notes || '',
+              qmDeviationNumber: d1Row.qm_deviation_number || '',
+              qmSignature: d1QmSig,
+              actualSampleSize: d1Row.actual_sample_size !== null ? Number(d1Row.actual_sample_size) : undefined,
+              actualSampleUnit: d1Row.actual_sample_unit || undefined,
+              sampledContainers: d1Row.sampled_containers || undefined,
+              sampledBy: d1Row.sampled_by || undefined,
+              samplingDateTime: d1Row.sampling_date_time || undefined,
+              createdAt: d1Row.created_at || new Date().toISOString(),
+              updatedAt: d1Row.updated_at || new Date().toISOString(),
+            } as any;
+          } else {
+            if (parsedParams && parsedParams.length > 0) {
+              report.parameters = parsedParams;
+            }
+            if (d1Row.status) report.status = d1Row.status;
+            if (d1Row.staff_decision) report.staffDecision = d1Row.staff_decision;
+            if (d1Row.staff_notes !== undefined) report.staffNotes = d1Row.staff_notes;
+            if (d1StaffSig) report.staffSignature = d1StaffSig;
+            if (d1Row.qm_decision) report.qmDecision = d1Row.qm_decision;
+            if (d1Row.qm_notes !== undefined) report.qmNotes = d1Row.qm_notes;
+            if (d1Row.qm_deviation_number !== undefined) report.qmDeviationNumber = d1Row.qm_deviation_number;
+            if (d1QmSig) report.qmSignature = d1QmSig;
+            if (d1Row.lot_internal_number) {
+              report.lotInternalNumber = d1Row.lot_internal_number;
+              report.reportNumber = d1Row.lot_internal_number;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[qualityService] Direct /api/qc fetch error:', e);
+    }
+
+    // Always attempt to fetch full GRN detail from backend to guarantee complete parameters & staff signatures
+    const lookupKey = report?.grnId || report?.grnNumber || reportId;
+    if (lookupKey) {
+      try {
+        const fullGrn = await warehouseService.getGrnDetail(lookupKey);
+        if (fullGrn && fullGrn.qcPayload) {
+          if (!report) {
+            const allReports = await qualityService.getReports();
+            report = findMatchingQcReport(allReports, lookupKey) || undefined;
+          }
+          if (report) {
+            if (fullGrn.qcPayload.parameters && fullGrn.qcPayload.parameters.length > 0 && (!report.parameters || report.parameters.length === 0)) {
+              report.parameters = fullGrn.qcPayload.parameters;
+            }
+            if (fullGrn.qcPayload.staffDecision && !report.staffDecision) {
+              report.staffDecision = fullGrn.qcPayload.staffDecision;
+            }
+            if (fullGrn.qcPayload.staffNotes !== undefined && !report.staffNotes) {
+              report.staffNotes = fullGrn.qcPayload.staffNotes;
+            }
+            if (fullGrn.qcPayload.staffSignature && !report.staffSignature) {
+              report.staffSignature = fullGrn.qcPayload.staffSignature;
+            }
+            if (fullGrn.qcPayload.qmDecision && !report.qmDecision) {
+              report.qmDecision = fullGrn.qcPayload.qmDecision;
+            }
+            if (fullGrn.qcPayload.qmNotes !== undefined && !report.qmNotes) {
+              report.qmNotes = fullGrn.qcPayload.qmNotes;
+            }
+            if (fullGrn.qcPayload.qmDeviationNumber !== undefined && !report.qmDeviationNumber) {
+              report.qmDeviationNumber = fullGrn.qcPayload.qmDeviationNumber;
+            }
+            if (fullGrn.qcPayload.qmSignature && !report.qmSignature) {
+              report.qmSignature = fullGrn.qcPayload.qmSignature;
+            }
+            if (fullGrn.qcPayload.aiAssessment && !report.aiAssessment) {
+              report.aiAssessment = fullGrn.qcPayload.aiAssessment;
+            }
+            if (fullGrn.qcPayload.lotInternalNumber && !report.lotInternalNumber) {
+              report.lotInternalNumber = fullGrn.qcPayload.lotInternalNumber;
+              report.reportNumber = fullGrn.qcPayload.lotInternalNumber;
+            }
+            if (fullGrn.qcPayload.status && report.status === 'QUARANTINE') {
+              report.status = fullGrn.qcPayload.status;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[qualityService] getReportById detail fetch notice:', err);
+      }
+    }
+
     return report || null;
   },
 
@@ -80,11 +221,15 @@ export const qualityService = {
   getReports: async (): Promise<QcInspectionReport[]> => {
     let storedReports: QcInspectionReport[] = [...memoryReports];
 
-    // Fetch master data from services (uses memory cache to protect against redundant D1 table scans)
-    let [packagingMaterials, rawMaterials, grnRecords] = await Promise.all([
+    // Fetch master data from services and physical QC reports from Cloudflare D1
+    let [packagingMaterials, rawMaterials, grnRecords, d1QcRows] = await Promise.all([
       packagingService.getPackagingMaterials(),
       materialService.getMaterials(),
       warehouseService.getGrnRecords(),
+      fetch('/api/qc')
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .then((j) => (Array.isArray(j?.data) ? j.data : []))
+        .catch(() => []),
     ]);
     let isModified = false;
 
@@ -105,7 +250,37 @@ export const qualityService = {
     // Synchronize GRN records into QC Reports
     grnRecords.forEach((grn) => {
       const stableId = grn.id ? (grn.id.startsWith('qc-rep-') ? grn.id : `qc-rep-${grn.id}`) : `qc-rep-${grn.grnNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-      const existingReport = storedReports.find((r) => r.id === stableId || r.grnId === grn.id || r.grnNumber === grn.grnNumber);
+      const existingReport = storedReports.find((r) => r.id === stableId || r.grnId === grn.id || r.grnNumber === grn.grnNumber || (grn.internalLotNumber && r.lotInternalNumber === grn.internalLotNumber));
+
+      const matchedD1 = d1QcRows.find((d: any) =>
+        d.id === stableId ||
+        d.id === grn.id ||
+        d.id === `qc-rep-${grn.id}` ||
+        d.grn_id === grn.id ||
+        d.grn_number === grn.grnNumber ||
+        (grn.internalLotNumber && d.lot_internal_number === grn.internalLotNumber)
+      );
+
+      let d1Params: any[] = [];
+      let d1StaffSig: any = undefined;
+      let d1QmSig: any = undefined;
+      let d1AiAssessment: any = undefined;
+      if (matchedD1) {
+        try {
+          d1Params = typeof matchedD1.parameters_json === 'string' ? JSON.parse(matchedD1.parameters_json) : (matchedD1.parameters_json || []);
+        } catch {}
+        try {
+          d1StaffSig = typeof matchedD1.staff_signature_json === 'string' ? JSON.parse(matchedD1.staff_signature_json) : matchedD1.staff_signature_json;
+          if (d1StaffSig && Object.keys(d1StaffSig).length === 0) d1StaffSig = undefined;
+        } catch {}
+        try {
+          d1QmSig = typeof matchedD1.qm_signature_json === 'string' ? JSON.parse(matchedD1.qm_signature_json) : matchedD1.qm_signature_json;
+          if (d1QmSig && Object.keys(d1QmSig).length === 0) d1QmSig = undefined;
+        } catch {}
+        try {
+          d1AiAssessment = typeof matchedD1.ai_assessment === 'string' ? JSON.parse(matchedD1.ai_assessment) : matchedD1.ai_assessment;
+        } catch {}
+      }
 
       // Resolve dynamic QC parameters strictly from Master Data (Bagian B)
       let resolvedParams: Array<{ name: string; spec: string }> = [];
@@ -184,8 +359,18 @@ export const qualityService = {
         let aiAssessment: any = undefined;
         let retestDate: string | undefined = undefined;
 
-        // Restore remote QC payload if available from Supabase notes
-        if (grn.qcPayload) {
+        // Restore from physical D1 table if available, or fallback to remote QC payload
+        if (matchedD1) {
+          if (matchedD1.staff_decision) staffDecision = matchedD1.staff_decision;
+          if (matchedD1.staff_notes !== undefined && matchedD1.staff_notes !== null) staffNotes = matchedD1.staff_notes;
+          if (d1StaffSig) staffSignature = d1StaffSig;
+          if (matchedD1.qm_decision) qmDecision = matchedD1.qm_decision;
+          if (matchedD1.qm_deviation_number) qmDeviationNumber = matchedD1.qm_deviation_number;
+          if (matchedD1.qm_notes !== undefined && matchedD1.qm_notes !== null) qmNotes = matchedD1.qm_notes;
+          if (d1QmSig) qmSignature = d1QmSig;
+          if (d1AiAssessment) aiAssessment = d1AiAssessment;
+          if (matchedD1.retest_date) retestDate = matchedD1.retest_date;
+        } else if (grn.qcPayload) {
           staffDecision = grn.qcPayload.staffDecision;
           staffNotes = grn.qcPayload.staffNotes || '';
           staffSignature = grn.qcPayload.staffSignature;
@@ -198,11 +383,20 @@ export const qualityService = {
         }
 
         if (effectiveParamTemplates.length > 0) {
-          const currentSavedParams = grn.qcPayload?.parameters || (existingReport as any)?.parameters || [];
+          const currentSavedParams = (d1Params && d1Params.length > 0)
+            ? d1Params
+            : (grn.qcPayload?.parameters || (existingReport as any)?.parameters || []);
           parameters = effectiveParamTemplates.map((templateItem, idx) => {
-            const matchedExisting = currentSavedParams.find(
-              (p: any) => p.parameterName?.trim().toLowerCase() === templateItem.name.trim().toLowerCase()
-            );
+            const matchedExisting = currentSavedParams.find((p: any) => {
+              const pName = (p.parameterName || '').trim().toLowerCase();
+              const tName = templateItem.name.trim().toLowerCase();
+              if (pName === tName) return true;
+              if ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                  (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph('))) {
+                return true;
+              }
+              return false;
+            });
             return {
               id: matchedExisting?.id || `param-${Date.now()}-${idx}`,
               parameterName: templateItem.name,
@@ -212,18 +406,33 @@ export const qualityService = {
               notes: matchedExisting?.notes || '',
             };
           });
+
+          // Also preserve any saved parameters that were not part of template
+          const extraSaved = currentSavedParams.filter((p: any) => {
+            const pName = (p.parameterName || '').trim().toLowerCase();
+            return !effectiveParamTemplates.some(t => {
+              const tName = t.name.trim().toLowerCase();
+              return pName === tName ||
+                ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                 (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')));
+            });
+          });
+          if (extraSaved.length > 0) {
+            parameters = [...parameters, ...extraSaved];
+          }
         } 
         
         if (!retestDate && grn.materialType === 'raw') {
           retestDate = grn.retestDate || calculateAutoRetestDate('raw', grn.expiryDate, grn.receivedDate);
         }
 
-        const effectiveStatus: QcInspectionStatus = (grn.qcPayload?.status as QcInspectionStatus) ||
+        const effectiveStatus: QcInspectionStatus = (matchedD1?.status as QcInspectionStatus) ||
+          (grn.qcPayload?.status as QcInspectionStatus) ||
           (grn.qcStatus as QcInspectionStatus) ||
           'QUARANTINE';
         const isOfficialDone = ['PASSED', 'PASSED_WITH_DEVIATION', 'REJECTED'].includes(effectiveStatus);
 
-        let rawLot = grn.internalLotNumber || grn.qcPayload?.lotInternalNumber;
+        let rawLot = matchedD1?.lot_internal_number || grn.internalLotNumber || grn.qcPayload?.lotInternalNumber;
         let lotInternalNumber = rawLot
           ? normalizeLotNumber(rawLot, grn.receivedDate)
           : generateLotInternalNumber(grn.materialType, storedReports, grn.receivedDate);
@@ -324,6 +533,51 @@ export const qualityService = {
           needsUpdate = true;
         }
 
+        // Merge physical D1 record if available (highest priority)
+        if (matchedD1) {
+          if (matchedD1.status && existingReport.status !== matchedD1.status) {
+            existingReport.status = matchedD1.status;
+            needsUpdate = true;
+          }
+          if (d1StaffSig && !existingReport.staffSignature) {
+            existingReport.staffSignature = d1StaffSig;
+            needsUpdate = true;
+          }
+          if (matchedD1.staff_decision && !existingReport.staffDecision) {
+            existingReport.staffDecision = matchedD1.staff_decision;
+            needsUpdate = true;
+          }
+          if (matchedD1.staff_notes !== undefined && (!existingReport.staffNotes || existingReport.staffNotes === '')) {
+            existingReport.staffNotes = matchedD1.staff_notes;
+            needsUpdate = true;
+          }
+          if (d1QmSig && !existingReport.qmSignature) {
+            existingReport.qmSignature = d1QmSig;
+            needsUpdate = true;
+          }
+          if (matchedD1.qm_decision && !existingReport.qmDecision) {
+            existingReport.qmDecision = matchedD1.qm_decision;
+            needsUpdate = true;
+          }
+          if (matchedD1.qm_notes !== undefined && (!existingReport.qmNotes || existingReport.qmNotes === '')) {
+            existingReport.qmNotes = matchedD1.qm_notes;
+            needsUpdate = true;
+          }
+          if (matchedD1.qm_deviation_number !== undefined && !existingReport.qmDeviationNumber) {
+            existingReport.qmDeviationNumber = matchedD1.qm_deviation_number;
+            needsUpdate = true;
+          }
+          if (matchedD1.lot_internal_number && (!existingReport.lotInternalNumber || existingReport.lotInternalNumber !== matchedD1.lot_internal_number)) {
+            existingReport.lotInternalNumber = matchedD1.lot_internal_number;
+            existingReport.reportNumber = matchedD1.lot_internal_number;
+            needsUpdate = true;
+          }
+          if (d1Params && d1Params.length > 0) {
+            existingReport.parameters = d1Params;
+            needsUpdate = true;
+          }
+        }
+
         // Merge remote QC payload if available
         if (grn.qcPayload) {
           if (grn.qcPayload.status && existingReport.status !== grn.qcPayload.status) {
@@ -360,9 +614,16 @@ export const qualityService = {
           }
           if (grn.qcPayload.parameters && Array.isArray(grn.qcPayload.parameters) && grn.qcPayload.parameters.length > 0) {
             existingReport.parameters = grn.qcPayload.parameters.map((remoteP: any) => {
-              const localP = existingReport.parameters?.find(
-                (lp) => lp.parameterName === remoteP.parameterName || lp.id === remoteP.id
-              );
+              const localP = existingReport.parameters?.find((lp) => {
+                const lpName = (lp.parameterName || '').trim().toLowerCase();
+                const rpName = (remoteP.parameterName || '').trim().toLowerCase();
+                if (lpName === rpName) return true;
+                if ((rpName === 'ph' || rpName.startsWith('ph ') || rpName.startsWith('ph(')) &&
+                    (lpName === 'ph' || lpName.startsWith('ph ') || lpName.startsWith('ph('))) {
+                  return true;
+                }
+                return lp.id === remoteP.id;
+              });
               const remoteVal = typeof remoteP.resultValue === 'string' ? remoteP.resultValue.trim() : '';
               const localVal = localP && typeof localP.resultValue === 'string' ? localP.resultValue.trim() : '';
               const finalVal = remoteVal !== '' ? remoteP.resultValue : (localVal !== '' ? localP?.resultValue : '');
@@ -506,8 +767,25 @@ export const qualityService = {
         }
 
         // Live Synchronization with Master Bahan Kemas / Bahan Baku (Bagian B)
-        // If the report is in QUARANTINE, QUALITY_CONTROL_PROCESS, or has empty parameters, ensure criteria from Master Data are fully synced
-        const shouldSyncMasterParams = (['QUARANTINE', 'QUALITY_CONTROL_PROCESS', 'AWAITING_QM_AUTHORIZATION'].includes(existingReport.status) || !existingReport.parameters || existingReport.parameters.length === 0) && effectiveParamTemplates.length > 0;
+        // If the report is in QUARANTINE or QUALITY_CONTROL_PROCESS with NO entered test results yet, ensure criteria from Master Data are synced.
+        // NEVER overwrite reports in AWAITING_QM_AUTHORIZATION, PASSED, PASSED_WITH_DEVIATION, REJECTED, or reports that already have staff test results.
+        const isAwaitingOrDone = [
+          'AWAITING_QM_AUTHORIZATION',
+          'PASSED',
+          'PASSED_WITH_DEVIATION',
+          'REJECTED',
+        ].includes(existingReport.status) || Boolean(existingReport.staffSignature) || Boolean(existingReport.staffDecision);
+
+        const hasEnteredResults = (existingReport.parameters || []).some(
+          (p) => typeof p.resultValue === 'string' && p.resultValue.trim() !== ''
+        );
+
+        const shouldSyncMasterParams =
+          !isAwaitingOrDone &&
+          !hasEnteredResults &&
+          (['QUARANTINE', 'QUALITY_CONTROL_PROCESS'].includes(existingReport.status) || !existingReport.parameters || existingReport.parameters.length === 0) &&
+          effectiveParamTemplates.length > 0;
+
         if (shouldSyncMasterParams) {
           const currentParams = existingReport.parameters || [];
           const isParameterCountMismatch = currentParams.length !== effectiveParamTemplates.length;
@@ -521,7 +799,16 @@ export const qualityService = {
 
           if (isParameterCountMismatch || isNameMismatch || isSpecMismatch || currentParams.length === 0) {
             existingReport.parameters = effectiveParamTemplates.map((item, idx) => {
-              const matchedP = currentParams.find((p) => (p.parameterName || '').trim().toLowerCase() === item.name.trim().toLowerCase());
+              const matchedP = currentParams.find((p) => {
+                const pName = (p.parameterName || '').trim().toLowerCase();
+                const tName = item.name.trim().toLowerCase();
+                if (pName === tName) return true;
+                if ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                    (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph('))) {
+                  return true;
+                }
+                return false;
+              });
               return {
                 id: matchedP?.id || `param-${Date.now()}-${idx}`,
                 parameterName: item.name,
@@ -531,6 +818,21 @@ export const qualityService = {
                 notes: matchedP?.notes || '',
               };
             });
+
+            // Also preserve extra parameters
+            const extraCurrent = currentParams.filter((p) => {
+              const pName = (p.parameterName || '').trim().toLowerCase();
+              return !effectiveParamTemplates.some((t) => {
+                const tName = t.name.trim().toLowerCase();
+                return pName === tName ||
+                  ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                   (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')));
+              });
+            });
+            if (extraCurrent.length > 0) {
+              existingReport.parameters = [...existingReport.parameters, ...extraCurrent];
+            }
+
             needsUpdate = true;
           }
         }
@@ -538,6 +840,61 @@ export const qualityService = {
         if (needsUpdate) {
           isModified = true;
         }
+      }
+    });
+
+    // Also include any standalone D1 reports (e.g. Lot LBB2610050) that might not be in warehouse_grn records
+    d1QcRows.forEach((row: any) => {
+      const alreadyIn = storedReports.some(
+        (r) => r.id === row.id || (row.lot_internal_number && r.lotInternalNumber === row.lot_internal_number) || (row.grn_number && r.grnNumber === row.grn_number)
+      );
+      if (!alreadyIn) {
+        let p = [];
+        try { p = typeof row.parameters_json === 'string' ? JSON.parse(row.parameters_json) : (row.parameters_json || []); } catch {}
+        let sSig = undefined;
+        try { sSig = typeof row.staff_signature_json === 'string' ? JSON.parse(row.staff_signature_json) : row.staff_signature_json; if (sSig && Object.keys(sSig).length === 0) sSig = undefined; } catch {}
+        let qSig = undefined;
+        try { qSig = typeof row.qm_signature_json === 'string' ? JSON.parse(row.qm_signature_json) : row.qm_signature_json; if (qSig && Object.keys(qSig).length === 0) qSig = undefined; } catch {}
+
+        storedReports.push({
+          id: row.id,
+          grnId: row.grn_id,
+          grnNumber: row.grn_number,
+          reportNumber: row.report_number || row.lot_internal_number,
+          lotInternalNumber: row.lot_internal_number,
+          materialCode: row.material_code,
+          materialName: row.material_name,
+          materialType: row.material_type || 'raw',
+          batchNumberVendor: row.batch_number || '',
+          quantityReceived: Number(row.quantity_received || 0),
+          unit: row.unit || 'kg',
+          containerCount: Number(row.container_count || 1),
+          containerType: row.container_type || 'Drum / Zak',
+          manufacturer: row.manufacturer || '',
+          distributor: row.distributor || '',
+          receivedDate: row.received_date || '',
+          expiryDate: row.expiry_date || '',
+          retestDate: row.retest_date || '',
+          storageConditions: row.storage_conditions || '',
+          status: (row.status as QcInspectionStatus) || 'QUARANTINE',
+          parameters: p,
+          samplingInfo: {},
+          staffDecision: row.staff_decision,
+          staffNotes: row.staff_notes || '',
+          staffSignature: sSig,
+          qmDecision: row.qm_decision,
+          qmNotes: row.qm_notes || '',
+          qmDeviationNumber: row.qm_deviation_number || '',
+          qmSignature: qSig,
+          actualSampleSize: row.actual_sample_size !== null ? Number(row.actual_sample_size) : undefined,
+          actualSampleUnit: row.actual_sample_unit || undefined,
+          sampledContainers: row.sampled_containers || undefined,
+          sampledBy: row.sampled_by || undefined,
+          samplingDateTime: row.sampling_date_time || undefined,
+          createdAt: row.created_at || new Date().toISOString(),
+          updatedAt: row.updated_at || new Date().toISOString(),
+        } as any);
+        isModified = true;
       }
     });
 
@@ -736,6 +1093,62 @@ export const qualityService = {
   },
 
   /**
+   * Save QC inspection draft in real-time to SQLite physical table and local storage
+   */
+  saveInspectionDraft: async (draftData: {
+    id?: string;
+    grnId?: string;
+    grnNumber?: string;
+    lotInternalNumber?: string;
+    parameters: QcParameterResult[];
+    staffNotes?: string;
+    staffDecision?: 'RELEASE' | 'REJECT';
+    actualSampleSize?: number;
+    actualSampleUnit?: string;
+    retestDate?: string;
+    sampledContainers?: string;
+    samplingDateTime?: string;
+    materialCode?: string;
+    materialName?: string;
+    materialType?: string;
+  }): Promise<{ success: boolean; savedAt: string }> => {
+    const nowIso = new Date().toISOString();
+    // 1. Instant local storage persistence for browser crash / refresh safety
+    try {
+      const draftKey = `lsm_qc_draft_${draftData.lotInternalNumber || draftData.grnNumber || draftData.id}`;
+      localStorage.setItem(draftKey, JSON.stringify({ ...draftData, savedAt: nowIso }));
+    } catch {}
+
+    // 2. Persist to Cloudflare D1 physical table via /api/qc/draft
+    try {
+      const res = await fetch('/api/qc/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draftData),
+      });
+      if (res.ok) {
+        return { success: true, savedAt: nowIso };
+      }
+    } catch (e) {
+      console.warn('[qualityService] Failed to auto-save draft to D1:', e);
+    }
+    return { success: true, savedAt: nowIso };
+  },
+
+  /**
+   * Retrieve cached inspection draft
+   */
+  getInspectionDraft: (identifier?: string | null): any | null => {
+    if (!identifier || typeof window === 'undefined' || !window.localStorage) return null;
+    try {
+      const raw = localStorage.getItem(`lsm_qc_draft_${identifier}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
    * Submit Staff QC analysis, confirm with password, issue Internal Lot Number, and transition to AWAITING_QM_AUTHORIZATION
    */
   submitStaffAnalysis: async (
@@ -837,18 +1250,39 @@ export const qualityService = {
     // Retain submitted parameters mapped to master parameters, or preserve submitted parameters
     if (masterParams.length > 0) {
       report.parameters = masterParams.map((mp, idx) => {
-        const matchedSubmitted = parameters.find(
-          p => p.parameterName.trim().toLowerCase() === mp.name.toLowerCase()
-        );
+        const matchedSubmitted = parameters.find(p => {
+          const pName = (p.parameterName || '').trim().toLowerCase();
+          const mName = mp.name.trim().toLowerCase();
+          if (pName === mName) return true;
+          if ((mName === 'ph' || mName.startsWith('ph ') || mName.startsWith('ph(')) &&
+              (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph('))) {
+            return true;
+          }
+          return false;
+        });
         return {
           id: matchedSubmitted?.id || `param-${Date.now()}-${idx}`,
           parameterName: mp.name,
           specification: mp.spec,
-          resultValue: matchedSubmitted?.resultValue || '',
+          resultValue: matchedSubmitted?.resultValue !== undefined ? matchedSubmitted.resultValue : '',
           isCompliant: matchedSubmitted?.isCompliant ?? true,
           notes: matchedSubmitted?.notes || '',
         };
       });
+
+      // Also retain any extra submitted parameters (including custom parameters or specific pH parameters)
+      const extraSubmitted = parameters.filter(p => {
+        const pName = (p.parameterName || '').trim().toLowerCase();
+        return !masterParams.some(mp => {
+          const mName = mp.name.trim().toLowerCase();
+          return pName === mName ||
+            ((mName === 'ph' || mName.startsWith('ph ') || mName.startsWith('ph(')) &&
+             (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')));
+        });
+      });
+      if (extraSubmitted.length > 0) {
+        report.parameters = [...report.parameters, ...extraSubmitted];
+      }
     } else {
       report.parameters = parameters;
     }
@@ -892,7 +1326,8 @@ export const qualityService = {
     report.status = 'AWAITING_QM_AUTHORIZATION';
     report.updatedAt = new Date().toISOString();
 
-    // 1. Sync complete QC report payload (with filled parameters) directly to Supabase FIRST
+    // 1. Sync complete QC report payload directly to physical D1 database and Supabase
+    await syncQcReportToD1(report);
     await syncQcReportToSupabase(report);
 
     // 2. Keep local memory cache updated immediately
@@ -1005,7 +1440,8 @@ export const qualityService = {
     report.status = finalStatus;
     report.updatedAt = new Date().toISOString();
 
-    // Sync to warehouse
+    // Sync to physical D1 database, warehouse, and Supabase
+    await syncQcReportToD1(report);
     await qualityService.syncGrnStatus(report.grnId, finalStatus);
     await syncQcReportToSupabase(report);
 

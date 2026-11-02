@@ -1,6 +1,6 @@
 {
-  "summary":  "Revised implementation plan incorporating separated filling and packaging steps, separated QM release and warehouse receipt, packaging material handover step, procedural/parallel step configuration, and start/finish timestamp tracking.",
-  "updatedAt":  "2026-10-27T02:05:33.519146856Z",
+  "summary":  "Rencana Audit Mendalam & Solusi Permanen Penyimpanan Hasil Analisa QC (Lot LBB2610050)\n- Menjelaskan hasil temuan audit teknis atas penyebab hilangnya data analisa setelah tanda tangan digital\n- Membangun persistensi permanen ganda (D1 qc_inspection_reports + warehouse_grn)\n- Menambahkan auto-save draf real-time pada modal pengujian QC Lab\n- Memulihkan data lot LBB2610050 agar siap diinput dan disetujui tanpa risiko hilang kembali",
+  "updatedAt":  "2026-11-02T04:24:59.050859633Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

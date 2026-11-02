@@ -83,7 +83,7 @@ export const ipcBulkService = {
     try {
       const { data, error } = await supabase
         .from('ipc_bulk_batches')
-        .select('id, batch_no, product_code, product_name, mixing_date, mixing_qty_kg, ph, viscosity, appearance, gravity, status, analyst, notes, created_at, updated_at')
+        .select('id, batch_no, product_code, product_name, mixing_date, mixing_qty_kg, ph, viscosity, appearance, gravity, status, analyst, notes, lab_parameters, created_at, updated_at')
         .order('created_at', { ascending: false })
         .limit(300);
 
@@ -98,6 +98,12 @@ export const ipcBulkService = {
           if (!ipcNo || !ipcNo.startsWith('LPR-')) {
             ipcNo = formatIpcNumber(data.length - idx);
           }
+          let parsedLabParams: any = undefined;
+          if (row.lab_parameters) {
+            try {
+              parsedLabParams = typeof row.lab_parameters === 'string' ? JSON.parse(row.lab_parameters) : row.lab_parameters;
+            } catch {}
+          }
           return {
             id: ipcNo,
             ipcNo: ipcNo,
@@ -107,13 +113,14 @@ export const ipcBulkService = {
             mixingDate: row.mixing_date || row.mixingDate || '',
             testDate: row.test_date || row.testDate || row.updated_at?.split('T')[0] || undefined,
             mixingQtyKg: row.mixing_qty_kg ? Number(row.mixing_qty_kg) : undefined,
-            pH: Number(row.ph || row.pH || 6.0),
+            pH: row.ph !== undefined && row.ph !== null ? Number(row.ph) : (row.pH !== undefined ? Number(row.pH) : 6.0),
             viscosity: Number(row.viscosity || 4000),
             appearance: row.appearance || 'Homogen, Sesuai Spek',
             gravity: Number(row.gravity || 1.0),
             status: row.status || 'TESTING',
             analyst: row.analyst || 'Staf QC Lab',
-            rejectionReason: row.rejection_reason || undefined,
+            rejectionReason: row.notes || row.rejection_reason || undefined,
+            labParameters: parsedLabParams,
           };
         });
         inMemoryIpcBatches = mapped;
@@ -235,6 +242,7 @@ export const ipcBulkService = {
           status: updatedBatch.status,
           analyst: updatedBatch.analyst,
           notes: updatedBatch.rejectionReason || null,
+          lab_parameters: updatedBatch.labParameters ? JSON.stringify(updatedBatch.labParameters) : null,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'batch_no' });
 

@@ -16,6 +16,7 @@ import {
   Cloud,
   RotateCcw,
   RefreshCw,
+  Save,
 } from 'lucide-react';
 import { QcInspectionReport, QcParameterResult } from '../types/qcTypes';
 import { analyzeLabResults } from '../utils/qcAiAssistant';
@@ -24,6 +25,7 @@ import { useAuth } from '../../../core/auth/AuthContext';
 import { warehouseService } from '../../warehouse/warehouseService';
 import { packagingService } from '../../rnd/materials/packagingService';
 import { materialService } from '../../rnd/materials/materialService';
+import { qualityService } from '../qualityService';
 import { CoaViewerModal } from '../../warehouse/components/CoaViewerModal';
 import { useEscapeKey } from '../../../core/utils/useEscapeKey';
 
@@ -64,6 +66,11 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   const [selectedContainers, setSelectedContainers] = useState<number[]>([]);
   const [samplingDateTime, setSamplingDateTime] = useState<string>('');
 
+  // Real-time Draft Saving States
+  const [draftStatus, setDraftStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const autoSaveTimerRef = useRef<any>(null);
+
   // Digital Signature Password Modal inside
   const [showSignatureModal, setShowSignatureModal] = useState(false);
   const [staffPassword, setStaffPassword] = useState('');
@@ -73,6 +80,83 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   const [showCoaViewer, setShowCoaViewer] = useState(false);
   const [isSyncingMaster, setIsSyncingMaster] = useState(false);
   const [masterSyncInfo, setMasterSyncInfo] = useState<string | null>(null);
+
+  const triggerAutoSave = (
+    updatedParams: QcParameterResult[],
+    notes: string,
+    decision: 'RELEASE' | 'REJECT',
+    sampleSize: string,
+    sampleUnit: string,
+    retest: string,
+    containers: number[],
+    samplTime: string
+  ) => {
+    if (!report) return;
+    setDraftStatus('saving');
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await qualityService.saveInspectionDraft({
+          id: report.id,
+          grnId: report.grnId,
+          grnNumber: report.grnNumber,
+          lotInternalNumber: report.lotInternalNumber,
+          materialCode: report.materialCode,
+          materialName: report.materialName,
+          materialType: report.materialType,
+          parameters: updatedParams,
+          staffNotes: notes,
+          staffDecision: decision,
+          actualSampleSize: sampleSize ? Number(sampleSize) : undefined,
+          actualSampleUnit: sampleUnit,
+          retestDate: retest,
+          sampledContainers: containers.join(','),
+          samplingDateTime: samplTime,
+        });
+        if (res.success) {
+          setDraftStatus('saved');
+          setDraftSavedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      } catch (err) {
+        console.warn('Auto-save error:', err);
+        setDraftStatus('idle');
+      }
+    }, 700);
+  };
+
+  const handleManualSaveDraft = async () => {
+    if (!report) return;
+    setDraftStatus('saving');
+    try {
+      const res = await qualityService.saveInspectionDraft({
+        id: report.id,
+        grnId: report.grnId,
+        grnNumber: report.grnNumber,
+        lotInternalNumber: report.lotInternalNumber,
+        materialCode: report.materialCode,
+        materialName: report.materialName,
+        materialType: report.materialType,
+        parameters,
+        staffNotes,
+        staffDecision,
+        actualSampleSize: actualSampleSize ? Number(actualSampleSize) : undefined,
+        actualSampleUnit,
+        retestDate,
+        sampledContainers: selectedContainers.join(','),
+        samplingDateTime,
+      });
+      if (res.success) {
+        setDraftStatus('saved');
+        setDraftSavedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+    } catch {
+      setDraftStatus('idle');
+    }
+  };
 
   useEscapeKey(() => {
     if (showCoaViewer) {
@@ -155,9 +239,16 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
 
           let hasChanges = false;
           const updated = masterParams.map((mp, idx) => {
-            const existing = prevParams.find(
-              (p) => (p.parameterName || '').trim().toLowerCase() === mp.name.toLowerCase()
-            );
+            const existing = prevParams.find((p) => {
+              const pName = (p.parameterName || '').trim().toLowerCase();
+              const mName = mp.name.trim().toLowerCase();
+              if (pName === mName) return true;
+              if ((mName === 'ph' || mName.startsWith('ph ') || mName.startsWith('ph(')) &&
+                  (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph('))) {
+                return true;
+              }
+              return false;
+            });
 
             if (existing) {
               const specNeedsUpdate =
@@ -173,6 +264,7 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
                   ...existing,
                   parameterName: mp.name,
                   specification: mp.specification,
+                  resultValue: existing.resultValue !== undefined ? existing.resultValue : '',
                 };
               }
               return existing;
@@ -188,9 +280,20 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
             }
           });
 
+          const extraParams = prevParams.filter((p) => {
+            const pName = (p.parameterName || '').trim().toLowerCase();
+            return !masterParams.some((mp) => {
+              const mName = mp.name.trim().toLowerCase();
+              return pName === mName ||
+                ((mName === 'ph' || mName.startsWith('ph ') || mName.startsWith('ph(')) &&
+                 (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')));
+            });
+          });
+          const finalUpdated = extraParams.length > 0 ? [...updated, ...extraParams] : updated;
+
           if (hasChanges || forceOverwrite) {
             setMasterSyncInfo(`Spesifikasi disinkronkan dari Master Data (${masterParams.length} parameter).`);
-            return updated;
+            return finalUpdated;
           } else if (forceOverwrite) {
             setMasterSyncInfo('Spesifikasi sudah sesuai dengan Master Data.');
           }
@@ -208,9 +311,45 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
 
   useEffect(() => {
     if (report) {
-      const initialParams = report.parameters && report.parameters.length > 0
+      const draftKey = report.lotInternalNumber || report.grnNumber || report.id;
+      const localDraft = qualityService.getInspectionDraft(draftKey);
+
+      let initialParams = report.parameters && report.parameters.length > 0
         ? JSON.parse(JSON.stringify(report.parameters))
         : [];
+
+      // Restore parameters from saved draft if available
+      if (localDraft?.parameters && Array.isArray(localDraft.parameters) && localDraft.parameters.length > 0) {
+        initialParams = initialParams.map((p: any) => {
+          const matched = localDraft.parameters.find(
+            (dp: any) => (dp.parameterName || '').trim().toLowerCase() === (p.parameterName || '').trim().toLowerCase() || dp.id === p.id
+          );
+          if (matched && matched.resultValue !== undefined && matched.resultValue !== '') {
+            return {
+              ...p,
+              resultValue: matched.resultValue,
+              isCompliant: matched.isCompliant !== undefined ? matched.isCompliant : p.isCompliant,
+              notes: matched.notes || p.notes,
+            };
+          }
+          return p;
+        });
+
+        if (localDraft.staffNotes && !report.staffNotes) {
+          setStaffNotes(localDraft.staffNotes);
+        }
+        if (localDraft.staffDecision && !report.staffDecision) {
+          setStaffDecision(localDraft.staffDecision);
+        }
+        if (localDraft.actualSampleSize && !report.actualSampleSize) {
+          setActualSampleSize(String(localDraft.actualSampleSize));
+        }
+        if (localDraft.savedAt) {
+          setDraftSavedAt(new Date(localDraft.savedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
+          setDraftStatus('saved');
+        }
+      }
+
       setParameters(initialParams);
       setMasterSyncInfo(null);
 
@@ -223,7 +362,7 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
       const defaultUnit = report.actualSampleUnit || (report.materialType === 'raw' ? 'gram' : 'pcs');
       const defaultSize = report.actualSampleSize !== undefined && report.actualSampleSize !== null
         ? String(report.actualSampleSize)
-        : (report.materialType === 'packaging' ? String(report.samplingInfo.sampleSizeQuantity || '') : '');
+        : (report.materialType === 'packaging' ? String(report.samplingInfo?.sampleSizeQuantity || '') : '');
       setActualSampleSize(defaultSize);
       setActualSampleUnit(defaultUnit);
 
@@ -258,16 +397,20 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   }, [report]);
 
   const handleToggleContainer = (num: number) => {
-    setSelectedContainers((prev) =>
-      prev.includes(num) ? prev.filter((n) => n !== num) : [...prev, num].sort((a, b) => a - b)
-    );
+    setSelectedContainers((prev) => {
+      const updated = prev.includes(num) ? prev.filter((n) => n !== num) : [...prev, num].sort((a, b) => a - b);
+      triggerAutoSave(parameters, staffNotes, staffDecision, actualSampleSize, actualSampleUnit, retestDate, updated, samplingDateTime);
+      return updated;
+    });
   };
 
   const handleSetRetestMonths = (months: number) => {
     const baseDate = report?.receivedDate ? new Date(report.receivedDate) : new Date();
     const targetDate = new Date(baseDate);
     targetDate.setMonth(targetDate.getMonth() + months);
-    setRetestDate(targetDate.toISOString().split('T')[0]);
+    const newDate = targetDate.toISOString().split('T')[0];
+    setRetestDate(newDate);
+    triggerAutoSave(parameters, staffNotes, staffDecision, actualSampleSize, actualSampleUnit, newDate, selectedContainers, samplingDateTime);
   };
 
   if (!isOpen || !report) return null;
@@ -276,18 +419,22 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   const aiResult = analyzeLabResults(report.materialName, report.materialType, parameters);
 
   const handleParamValueChange = (id: string, value: string) => {
-    setParameters((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, resultValue: value } : p))
-    );
+    setParameters((prev) => {
+      const updated = prev.map((p) => (p.id === id ? { ...p, resultValue: value } : p));
+      triggerAutoSave(updated, staffNotes, staffDecision, actualSampleSize, actualSampleUnit, retestDate, selectedContainers, samplingDateTime);
+      return updated;
+    });
     if (focusedEmptyParamId === id && value.trim()) {
       setFocusedEmptyParamId(null);
     }
   };
 
   const handleParamComplianceToggle = (id: string, isCompliant: boolean) => {
-    setParameters((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, isCompliant } : p))
-    );
+    setParameters((prev) => {
+      const updated = prev.map((p) => (p.id === id ? { ...p, isCompliant } : p));
+      triggerAutoSave(updated, staffNotes, staffDecision, actualSampleSize, actualSampleUnit, retestDate, selectedContainers, samplingDateTime);
+      return updated;
+    });
   };
 
   const handleRevertRelease = async () => {
@@ -406,12 +553,26 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            {draftStatus === 'saving' && (
+              <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/30 text-amber-100 border border-amber-400/40 rounded-full text-xs font-medium animate-pulse">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                Menyimpan Draf...
+              </span>
+            )}
+            {draftStatus === 'saved' && (
+              <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/30 text-emerald-100 border border-emerald-400/40 rounded-full text-xs font-medium">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-300" />
+                Draf Tersimpan ({draftSavedAt || 'Auto-save'})
+              </span>
+            )}
+            <button
+              onClick={onClose}
+              className="text-white/80 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Content */}
@@ -926,6 +1087,15 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
                   Batalkan Release
                 </button>
               )}
+              <button
+                type="button"
+                onClick={handleManualSaveDraft}
+                disabled={draftStatus === 'saving'}
+                className="px-4 py-2 text-sm font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-colors flex items-center gap-2 cursor-pointer active:scale-98"
+              >
+                <Save className="w-4 h-4 text-teal-600" />
+                {draftStatus === 'saving' ? 'Menyimpan...' : 'Simpan Draf'}
+              </button>
               <button
                 type="button"
                 onClick={onClose}

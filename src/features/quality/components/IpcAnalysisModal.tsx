@@ -132,7 +132,7 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
 
           if (existingParam && existingParam.resultValue) {
             initialValue = existingParam.resultValue;
-          } else if (lowerName.includes('ph') && batch.pH) {
+          } else if (lowerName.includes('ph') && batch.pH !== undefined && batch.pH !== null) {
             initialValue = String(batch.pH);
           } else if ((lowerName.includes('viskos') || lowerName.includes('viscosity')) && batch.viscosity) {
             initialValue = `${batch.viscosity.toLocaleString('id-ID')} cPs`;
@@ -372,7 +372,9 @@ export const IpcAnalysisModal: React.FC<IpcAnalysisModalProps> = ({
         productCode: batch.productCode || productSpec?.productCode || productSpec?.code,
         mixingDate: assignedMixingDate,
         testDate: assignedTestDate,
-        pH: phRow && phRow.resultValue ? parseFloat(phRow.resultValue.replace(',', '.')) || batch.pH : batch.pH,
+        pH: phRow && phRow.resultValue && !isNaN(parseFloat(phRow.resultValue.replace(',', '.')))
+          ? parseFloat(phRow.resultValue.replace(',', '.'))
+          : (batch.pH ?? 6.0),
         viscosity: viscRow && viscRow.resultValue ? parseFloat(viscRow.resultValue.replace(',', '.')) || batch.viscosity : batch.viscosity,
         gravity: gravRow && gravRow.resultValue ? parseFloat(gravRow.resultValue.replace(',', '.')) || batch.gravity : batch.gravity,
         appearance: appRow && appRow.resultValue ? appRow.resultValue : batch.appearance,

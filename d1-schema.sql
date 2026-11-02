@@ -339,6 +339,7 @@ CREATE TABLE IF NOT EXISTS ipc_bulk_batches (
   analyst TEXT DEFAULT 'Staf QC (IPC)',
   origin TEXT DEFAULT 'MANUAL_ENTRY',
   notes TEXT,
+  lab_parameters TEXT DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

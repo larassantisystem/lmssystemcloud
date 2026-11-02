@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   RotateCcw,
@@ -21,6 +21,7 @@ import {
 import { GrnRecord, GrnQcStatus } from '../types/grnTypes';
 import { CoaViewerModal } from './CoaViewerModal';
 import { useEscapeKey } from '../../../core/utils/useEscapeKey';
+import { warehouseService } from '../warehouseService';
 
 interface GrnDetailModalProps {
   isOpen?: boolean;
@@ -31,15 +32,41 @@ interface GrnDetailModalProps {
 
 export const GrnDetailModal: React.FC<GrnDetailModalProps> = ({
   isOpen = true,
-  record,
+  record: initialRecord,
   onClose,
   onPrintLabel,
 }) => {
   const [showCoaViewer, setShowCoaViewer] = useState(false);
+  const [detailedRecord, setDetailedRecord] = useState<GrnRecord | null>(initialRecord);
+  const [isLoadingFull, setIsLoadingFull] = useState(false);
 
-  useEscapeKey(onClose, isOpen && !showCoaViewer && !!record);
+  useEffect(() => {
+    if (initialRecord) {
+      setDetailedRecord(initialRecord);
+      setIsLoadingFull(true);
+      warehouseService
+        .getGrnDetail(initialRecord.id || initialRecord.grnNumber)
+        .then((full) => {
+          if (full) {
+            setDetailedRecord(full);
+          }
+        })
+        .catch((err) => {
+          console.warn('[GrnDetailModal] getGrnDetail notice:', err);
+        })
+        .finally(() => {
+          setIsLoadingFull(false);
+        });
+    } else {
+      setDetailedRecord(null);
+    }
+  }, [initialRecord]);
 
-  if (!isOpen || !record) return null;
+  useEscapeKey(onClose, isOpen && !showCoaViewer && !!initialRecord);
+
+  if (!isOpen || !initialRecord) return null;
+
+  const record = detailedRecord || initialRecord;
 
   const renderStatusBadge = (status: GrnQcStatus) => {
     switch (status) {
@@ -130,6 +157,12 @@ export const GrnDetailModal: React.FC<GrnDetailModalProps> = ({
                 <span className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-blue-100/80 text-blue-900 border border-blue-200">
                   {record.grnNumber}
                 </span>
+                {isLoadingFull && (
+                  <span className="text-[10px] text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse font-medium">
+                    <Clock className="w-2.5 h-2.5 animate-spin" />
+                    Memuat data lengkap...
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 Bukti kedatangan fisik & pemeriksaan logistik gudang CPKB

@@ -581,12 +581,12 @@ export const warehouseService = {
       // Prioritize Cloudflare D1
       if (supabaseClient.isCloudflareConfigured) {
         try {
-          // Fetch from D1 API
+          // Fetch from D1 API - query summary columns including notes for qcPayload unpack
           const response = await fetch('/api/d1/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-              sql: 'SELECT id, grn_number, material_type, material_code, material_name, purchase_order_number, supplier_batch_number, received_date, quantity_received, unit, qc_status, notes, revert_reason, reverted_by, reverted_at, created_at, qc_parameters_count, internal_lot_number, storage_location, expiration_date, manufacturer, distributor, container_count, container_type, storage_conditions, seal_condition, packaging_condition FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
+              sql: 'SELECT id, grn_number, material_type, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, quantity_received, unit, container_count, container_type, qc_status, notes, created_at FROM warehouse_grn ORDER BY created_at DESC LIMIT 2000', 
               params: [] 
             })
           });
@@ -613,7 +613,7 @@ export const warehouseService = {
           let { data, error }: { data: any; error: any } = await withTimeout(
             supabase
               .from('warehouse_grn')
-              .select('id, grn_number, material_type, material_id, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, po_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, expiry_date, retest_date, quantity_received, current_quantity, unit, container_count, container_type, storage_location, storage_conditions, qc_status, qc_parameters_count, seal_condition, packaging_condition, coa_attachment, received_by, notes, created_at, updated_at')
+              .select('id, grn_number, material_type, material_code, material_name, manufacturer, distributor, delivery_note_number, purchase_order_number, supplier_batch_number, batch_number, internal_lot_number, received_date, expiration_date, quantity_received, current_quantity, unit, container_count, container_type, qc_status, notes, created_at')
               .order('created_at', { ascending: false })
               .limit(2000),
             15000
@@ -720,24 +720,77 @@ export const warehouseService = {
     }
   },
 
-  getGrnRecordById: async (id: string): Promise<GrnRecord | null> => {
+  /**
+   * Mengambil data LENGKAP untuk satu GRN secara on-demand saat pengguna membuka detail
+   * (SELECT * FROM warehouse_grn WHERE id = ? OR grn_number = ? LIMIT 1).
+   */
+  getGrnDetail: async (idOrGrnNumber: string): Promise<GrnRecord | null> => {
+    if (!idOrGrnNumber) return null;
+    const cleanKey = String(idOrGrnNumber).trim();
+
+    // 1. Prioritas endpoint server /api/grn?id=... (melakukan SELECT * di D1 untuk 1 kode GRN)
+    try {
+      const res = await fetch(`/api/grn?id=${encodeURIComponent(cleanKey)}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data) {
+          const fullRecord = mapDbRowToGrnRecord(json.data);
+          const idx = inMemoryGrnRecords.findIndex(
+            (r) => r.id === fullRecord.id || r.grnNumber === fullRecord.grnNumber
+          );
+          if (idx !== -1) {
+            inMemoryGrnRecords[idx] = { ...inMemoryGrnRecords[idx], ...fullRecord };
+          }
+          return fullRecord;
+        }
+      }
+    } catch (err) {
+      console.warn('[warehouseService] /api/grn?id detail fetch notice:', err);
+    }
+
+    // 2. Direct Cloudflare D1 query fallback
+    if (supabaseClient.isCloudflareConfigured) {
+      try {
+        const response = await fetch('/api/d1/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sql: 'SELECT * FROM warehouse_grn WHERE id = ? OR grn_number = ? LIMIT 1',
+            params: [cleanKey, cleanKey],
+          }),
+        });
+        const data = await response.json();
+        if (data.results && data.results.length > 0) {
+          const fullRecord = mapDbRowToGrnRecord(data.results[0]);
+          return fullRecord;
+        }
+      } catch (err) {
+        console.warn('[warehouseService] D1 direct detail query notice:', err);
+      }
+    }
+
+    // 3. Supabase fallback
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
           .from('warehouse_grn')
           .select('*')
-          .eq('id', id)
+          .or(`id.eq.${cleanKey},grn_number.eq.${cleanKey}`)
           .maybeSingle();
 
         if (!error && data) {
           return mapDbRowToGrnRecord(data);
         }
       } catch (err) {
-        console.warn('[warehouseService] Failed to fetch GRN detail:', err);
+        console.warn('[warehouseService] Supabase getGrnDetail notice:', err);
       }
     }
-    const all = await warehouseService.getGrnRecords();
-    return all.find(r => r.id === id) || null;
+
+    return inMemoryGrnRecords.find((r) => r.id === cleanKey || r.grnNumber === cleanKey) || null;
+  },
+
+  getGrnRecordById: async (id: string): Promise<GrnRecord | null> => {
+    return await warehouseService.getGrnDetail(id);
   },
 
   /**
@@ -1035,7 +1088,7 @@ export const warehouseService = {
                 ? Number(matchedItem.currentQuantity)
                 : Number(matchedItem.quantityReceived))),
       qcPayload: updatedData.qcPayload !== undefined 
-        ? { ...updatedData.qcPayload, parameters: updatedData.qcPayload.parameters?.filter((p: any) => p.parameterName !== 'pH') } 
+        ? updatedData.qcPayload 
         : (matchedItem.qcPayload || remotePayload),
     };
 

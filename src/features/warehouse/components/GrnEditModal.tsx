@@ -17,6 +17,7 @@ import { GrnRecord } from '../types/grnTypes';
 import { useAuth } from '../../../core/auth/AuthContext';
 import { authService } from '../../../core/auth/authService';
 import { useEscapeKey } from '../../../core/utils/useEscapeKey';
+import { warehouseService } from '../warehouseService';
 
 interface GrnEditModalProps {
   isOpen: boolean;
@@ -70,6 +71,28 @@ export const GrnEditModal: React.FC<GrnEditModalProps> = ({
       });
       setErrorMsg('');
       setShowPasswordModal(false);
+
+      // On-demand fetch full record for editing
+      warehouseService.getGrnDetail(record.id || record.grnNumber).then((full) => {
+        if (full) {
+          setFormData((prev) => ({
+            ...prev,
+            manufacturer: full.manufacturer || prev.manufacturer,
+            distributor: full.distributor || prev.distributor,
+            batchNumber: full.batchNumber || prev.batchNumber,
+            deliveryNoteNumber: full.deliveryNoteNumber || prev.deliveryNoteNumber,
+            poNumber: full.poNumber || prev.poNumber,
+            quantityReceived: full.quantityReceived ?? prev.quantityReceived,
+            unit: full.unit || prev.unit,
+            containerCount: full.containerCount || prev.containerCount,
+            containerType: full.containerType || prev.containerType,
+            receivedDate: full.receivedDate || prev.receivedDate,
+            expiryDate: full.expiryDate || prev.expiryDate,
+            storageLocation: full.storageLocation || prev.storageLocation,
+            storageConditions: full.storageConditions || prev.storageConditions,
+          }));
+        }
+      }).catch(console.error);
     }
   }, [record]);
 

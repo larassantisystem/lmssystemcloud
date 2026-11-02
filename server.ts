@@ -280,6 +280,88 @@ if (fs.existsSync(schemaPath)) {
       console.warn('[Cloudflare D1 Engine] GRN seeding error:', e);
     }
 
+    // Ensure Lot LBB2610050 and Master Material RM-EXT-05 are seeded and recovered
+    try {
+      const aloeParams = [
+        { name: 'Pemeriksaan Visual / Organoleptik (Warna & Kejernihan)', specification: 'Cairan jernih hingga kuning muda transparan' },
+        { name: 'Bau / Aroma', specification: 'Khas lidah buaya alami, bebas bau asing' },
+        { name: 'Identifikasi Ekstrak Aloe Vera', specification: 'Positif mengandung Polisakarida Aloe' },
+        { name: 'Nilai pH (Larutan 10%, 25°C)', specification: '4.00 - 6.50' },
+        { name: 'Bobot Jenis / Specific Gravity (20°C)', specification: '1.010 - 1.030 g/ml' },
+        { name: 'Angka Lempeng Total (ALT)', specification: '< 100 CFU/g' },
+        { name: 'Uji Ragi & Kapang', specification: '< 10 CFU/g' },
+        { name: 'Patogen Spesifik (E. coli, P. aeruginosa, S. aureus)', specification: 'Negatif / 1g' }
+      ];
+      const aloeParamsJson = JSON.stringify(aloeParams);
+
+      // Seed / update RM-EXT-05 in raw_materials
+      db.prepare(`
+        INSERT INTO raw_materials (
+          id, code, name, category, storage_conditions, manufacturer, qc_parameters, qc_parameters_json, reorder_point
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET
+          qc_parameters = excluded.qc_parameters,
+          qc_parameters_json = excluded.qc_parameters_json
+      `).run(
+        'raw-rm-ext-05', 'RM-EXT-05', 'Aloe Barbadensis Leaf Extract (Ekstrak Lidah Buaya 10:1)',
+        'active', 'Simpan pada suhu 15-25°C terlindung dari cahaya', 'Naturex / Givaudan',
+        aloeParamsJson, aloeParamsJson, 20.0
+      );
+
+      const checkLot50 = db.prepare('SELECT id FROM warehouse_grn WHERE internal_lot_number = ? OR grn_number = ? LIMIT 1').get('LBB2610050', 'GRN-BB-261005-01') as any;
+      if (!checkLot50) {
+        console.log('[Cloudflare D1 Engine] Recovering & registering Lot LBB2610050...');
+        db.prepare(`
+          INSERT INTO warehouse_grn (
+            id, grn_number, material_type, material_code, material_name,
+            manufacturer, distributor, delivery_note_number, purchase_order_number, po_number,
+            supplier_batch_number, batch_number, internal_lot_number, received_date,
+            expiration_date, retest_date, quantity_received, current_quantity, unit, container_count,
+            container_type, storage_location, qc_status, received_by, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'grn-261005-01', 'GRN-BB-261005-01', 'raw', 'RM-EXT-05', 'Aloe Barbadensis Leaf Extract (Ekstrak Lidah Buaya 10:1)',
+          'Naturex / Givaudan', 'PT. Kemiko Indonesia', 'SJ-KEM-2026-1005', 'PO-2026-1005-01', 'PO-2026-1005-01',
+          'ALOE20261005', 'ALOE20261005', 'LBB2610050', '2026-10-05',
+          '2028-10-05', '2028-07-05', 50.0, 50.0, 'kg', 2,
+          'Jerigen HDPE', 'Gudang Karantina', 'QUALITY_CONTROL_PROCESS', 'Heni (Staf Gudang)',
+          'Penerimaan bahan baku aktif ekstrak lidah buaya, lot LBB2610050 dalam proses pengujian laboratorium QC.'
+        );
+        console.log('[Cloudflare D1 Engine] Successfully recovered Lot LBB2610050 into warehouse_grn.');
+      }
+
+      // Ensure corresponding report in qc_inspection_reports
+      const checkQc50 = db.prepare('SELECT id FROM qc_inspection_reports WHERE lot_internal_number = ? OR grn_number = ? LIMIT 1').get('LBB2610050', 'GRN-BB-261005-01') as any;
+      if (!checkQc50) {
+        const initParams = aloeParams.map((p, idx) => ({
+          id: `param-lbb50-${idx}`,
+          parameterName: p.name,
+          specification: p.specification,
+          resultValue: '',
+          isCompliant: true,
+          notes: ''
+        }));
+        db.prepare(`
+          INSERT INTO qc_inspection_reports (
+            id, grn_id, grn_number, report_number, lot_internal_number,
+            material_code, material_name, material_type, batch_number,
+            quantity_received, unit, container_count, container_type,
+            manufacturer, distributor, received_date, expiry_date, retest_date,
+            storage_conditions, status, parameters_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        `).run(
+          'qc-rep-grn-261005-01', 'grn-261005-01', 'GRN-BB-261005-01', 'LBB2610050', 'LBB2610050',
+          'RM-EXT-05', 'Aloe Barbadensis Leaf Extract (Ekstrak Lidah Buaya 10:1)', 'raw', 'ALOE20261005',
+          50.0, 'kg', 2, 'Jerigen HDPE',
+          'Naturex / Givaudan', 'PT. Kemiko Indonesia', '2026-10-05', '2028-10-05', '2028-07-05',
+          'Simpan pada suhu 15-25°C terlindung dari cahaya', 'QUALITY_CONTROL_PROCESS', JSON.stringify(initParams)
+        );
+        console.log('[Cloudflare D1 Engine] Successfully initialized QC Report for Lot LBB2610050.');
+      }
+    } catch (e) {
+      console.warn('[Cloudflare D1 Engine] Lot LBB2610050 registration notice:', e);
+    }
+
     // Seed initial users into Cloudflare D1 if empty
     const checkProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get() as any;
     if (!checkProfiles || checkProfiles.count === 0) {
@@ -582,6 +664,7 @@ const tableDefinitions: Record<string, { col: string; type: string }[]> = {
     { col: 'analyst', type: 'TEXT' },
     { col: 'origin', type: 'TEXT' },
     { col: 'notes', type: 'TEXT' },
+    { col: 'lab_parameters', type: "TEXT DEFAULT '[]'" },
   ],
   ipc_rework_batches: [
     { col: 'original_batch_no', type: 'TEXT' },
@@ -2198,9 +2281,32 @@ app.get('/api/grn', async (req: Request, res: Response) => {
     const totalItems = countRes.results[0]?.count || 0;
     const totalPages = Math.ceil(totalItems / ps) || 1;
     const offset = (p - 1) * ps;
+    const summaryColumns = [
+      'id',
+      'grn_number',
+      'material_type',
+      'material_code',
+      'material_name',
+      'manufacturer',
+      'distributor',
+      'delivery_note_number',
+      'purchase_order_number',
+      'supplier_batch_number',
+      'batch_number',
+      'internal_lot_number',
+      'received_date',
+      'expiration_date',
+      'quantity_received',
+      'unit',
+      'container_count',
+      'container_type',
+      'qc_status',
+      'notes',
+      'created_at',
+    ].join(', ');
 
     const dataRes = await executeD1Query(
-      `SELECT * FROM warehouse_grn ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT ${summaryColumns} FROM warehouse_grn ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       [...params, ps, offset]
     );
 
@@ -2349,7 +2455,7 @@ app.get('/api/qc', async (req: Request, res: Response) => {
 app.post('/api/qc', async (req: Request, res: Response) => {
   try {
     const b = req.body;
-    const newId = b.id || `qc-rep-${Date.now()}`;
+    const newId = b.id || (b.grn_id ? (b.grn_id.startsWith('qc-rep-') ? b.grn_id : `qc-rep-${b.grn_id}`) : `qc-rep-${Date.now()}`);
     const sql = `
       INSERT INTO qc_inspection_reports (
         id, grn_id, grn_number, report_number, lot_internal_number, material_code,
@@ -2359,23 +2465,153 @@ app.post('/api/qc', async (req: Request, res: Response) => {
         sampling_plan_json, sampled_containers, sampled_by, sampling_date_time,
         actual_sample_size, actual_sample_unit, staff_decision, staff_notes,
         staff_signature_json, qm_decision, qm_notes, qm_deviation_number, qm_signature_json,
-        ai_assessment, revert_reason, reverted_by, reverted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ai_assessment, revert_reason, reverted_by, reverted_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        grn_id = COALESCE(excluded.grn_id, qc_inspection_reports.grn_id),
+        grn_number = COALESCE(excluded.grn_number, qc_inspection_reports.grn_number),
+        report_number = COALESCE(excluded.report_number, qc_inspection_reports.report_number),
+        lot_internal_number = COALESCE(excluded.lot_internal_number, qc_inspection_reports.lot_internal_number),
+        material_code = COALESCE(excluded.material_code, qc_inspection_reports.material_code),
+        material_name = COALESCE(excluded.material_name, qc_inspection_reports.material_name),
+        material_type = COALESCE(excluded.material_type, qc_inspection_reports.material_type),
+        batch_number = COALESCE(excluded.batch_number, qc_inspection_reports.batch_number),
+        quantity_received = COALESCE(excluded.quantity_received, qc_inspection_reports.quantity_received),
+        unit = COALESCE(excluded.unit, qc_inspection_reports.unit),
+        container_count = COALESCE(excluded.container_count, qc_inspection_reports.container_count),
+        container_type = COALESCE(excluded.container_type, qc_inspection_reports.container_type),
+        manufacturer = COALESCE(excluded.manufacturer, qc_inspection_reports.manufacturer),
+        distributor = COALESCE(excluded.distributor, qc_inspection_reports.distributor),
+        received_date = COALESCE(excluded.received_date, qc_inspection_reports.received_date),
+        expiry_date = COALESCE(excluded.expiry_date, qc_inspection_reports.expiry_date),
+        retest_date = COALESCE(excluded.retest_date, qc_inspection_reports.retest_date),
+        storage_conditions = COALESCE(excluded.storage_conditions, qc_inspection_reports.storage_conditions),
+        status = COALESCE(excluded.status, qc_inspection_reports.status),
+        decision = COALESCE(excluded.decision, qc_inspection_reports.decision),
+        parameters_json = COALESCE(excluded.parameters_json, qc_inspection_reports.parameters_json),
+        sampling_plan_json = COALESCE(excluded.sampling_plan_json, qc_inspection_reports.sampling_plan_json),
+        sampled_containers = COALESCE(excluded.sampled_containers, qc_inspection_reports.sampled_containers),
+        sampled_by = COALESCE(excluded.sampled_by, qc_inspection_reports.sampled_by),
+        sampling_date_time = COALESCE(excluded.sampling_date_time, qc_inspection_reports.sampling_date_time),
+        actual_sample_size = COALESCE(excluded.actual_sample_size, qc_inspection_reports.actual_sample_size),
+        actual_sample_unit = COALESCE(excluded.actual_sample_unit, qc_inspection_reports.actual_sample_unit),
+        staff_decision = COALESCE(excluded.staff_decision, qc_inspection_reports.staff_decision),
+        staff_notes = COALESCE(excluded.staff_notes, qc_inspection_reports.staff_notes),
+        staff_signature_json = COALESCE(excluded.staff_signature_json, qc_inspection_reports.staff_signature_json),
+        qm_decision = COALESCE(excluded.qm_decision, qc_inspection_reports.qm_decision),
+        qm_notes = COALESCE(excluded.qm_notes, qc_inspection_reports.qm_notes),
+        qm_deviation_number = COALESCE(excluded.qm_deviation_number, qc_inspection_reports.qm_deviation_number),
+        qm_signature_json = COALESCE(excluded.qm_signature_json, qc_inspection_reports.qm_signature_json),
+        ai_assessment = COALESCE(excluded.ai_assessment, qc_inspection_reports.ai_assessment),
+        revert_reason = COALESCE(excluded.revert_reason, qc_inspection_reports.revert_reason),
+        reverted_by = COALESCE(excluded.reverted_by, qc_inspection_reports.reverted_by),
+        reverted_at = COALESCE(excluded.reverted_at, qc_inspection_reports.reverted_at),
+        updated_at = datetime('now')
     `;
+    const paramsJson = typeof b.parameters === 'string' ? b.parameters : JSON.stringify(b.parameters || []);
+    const samplingJson = typeof b.samplingPlan === 'string' ? b.samplingPlan : JSON.stringify(b.samplingPlan || b.samplingInfo || {});
+    const staffSigJson = typeof b.staffSignature === 'string' ? b.staffSignature : JSON.stringify(b.staffSignature || {});
+    const qmSigJson = typeof b.qmSignature === 'string' ? b.qmSignature : JSON.stringify(b.qmSignature || {});
+    const aiJson = typeof b.aiAssessment === 'string' ? b.aiAssessment : (b.aiAssessment ? JSON.stringify(b.aiAssessment) : null);
+
     await executeD1Query(sql, [
-      newId, b.grnId || b.grn_id || null, b.grnNumber || b.grn_number, b.reportNumber || b.report_number || null,
+      newId, b.grnId || b.grn_id || null, b.grnNumber || b.grn_number, b.reportNumber || b.report_number || b.lotInternalNumber || b.lot_internal_number || null,
       b.lotInternalNumber || b.lot_internal_number, b.materialCode || b.material_code, b.materialName || b.material_name,
       b.materialType || b.material_type || 'raw', b.batchNumber || b.batch_number || null, Number(b.quantityReceived || b.quantity_received || 0),
       b.unit || 'kg', Number(b.containerCount || b.container_count || 1), b.containerType || b.container_type || 'Drum / Zak',
       b.manufacturer || null, b.distributor || null, b.receivedDate || b.received_date || null,
       b.expiryDate || b.expiry_date || null, b.retestDate || b.retest_date || null, b.storageConditions || b.storage_conditions || null,
-      b.status || 'QUARANTINE', b.decision || null, JSON.stringify(b.parameters || []), JSON.stringify(b.samplingPlan || {}),
-      b.sampledContainers || null, b.sampledBy || null, b.samplingDateTime || null,
-      Number(b.actualSampleSize || 0) || null, b.actualSampleUnit || null, b.staffDecision || null, b.staffNotes || null,
-      JSON.stringify(b.staffSignature || {}), b.qmDecision || null, b.qmNotes || null, b.qmDeviationNumber || null,
-      JSON.stringify(b.qmSignature || {}), b.aiAssessment || null, b.revertReason || null, b.revertedBy || null, b.revertedAt || null
+      b.status || 'QUARANTINE', b.decision || null, paramsJson, samplingJson,
+      b.sampledContainers || b.sampled_containers || null, b.sampledBy || b.sampled_by || null, b.samplingDateTime || b.sampling_date_time || null,
+      Number(b.actualSampleSize || b.actual_sample_size || 0) || null, b.actualSampleUnit || b.actual_sample_unit || null,
+      b.staffDecision || b.staff_decision || null, b.staffNotes || b.staff_notes || null,
+      staffSigJson, b.qmDecision || b.qm_decision || null, b.qmNotes || b.qm_notes || null,
+      b.qmDeviationNumber || b.qm_deviation_number || null, qmSigJson,
+      aiJson, b.revertReason || b.revert_reason || null, b.revertedBy || b.reverted_by || null, b.revertedAt || b.reverted_at || null
     ]);
     res.status(201).json({ success: true, id: newId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// QC DRAFT AUTO-SAVE ENDPOINT
+app.post('/api/qc/draft', async (req: Request, res: Response) => {
+  try {
+    const b = req.body;
+    const targetId = b.id || (b.grnId ? (b.grnId.startsWith('qc-rep-') ? b.grnId : `qc-rep-${b.grnId}`) : null);
+    const grnNumber = b.grnNumber || b.grn_number;
+    const lotNumber = b.lotInternalNumber || b.lot_internal_number;
+
+    if (!targetId && !grnNumber && !lotNumber) {
+      return res.status(400).json({ error: 'Missing report identifier for draft saving' });
+    }
+
+    const { results } = await executeD1Query(
+      'SELECT * FROM qc_inspection_reports WHERE id = ? OR grn_number = ? OR lot_internal_number = ? LIMIT 1',
+      [targetId || '', grnNumber || '', lotNumber || '']
+    );
+
+    const existing = results[0];
+    const finalId = existing?.id || targetId || `qc-rep-${Date.now()}`;
+    const paramsJson = typeof b.parameters === 'string' ? b.parameters : JSON.stringify(b.parameters || []);
+
+    if (existing) {
+      await executeD1Query(
+        `UPDATE qc_inspection_reports SET
+          parameters_json = ?,
+          staff_notes = COALESCE(?, staff_notes),
+          staff_decision = COALESCE(?, staff_decision),
+          actual_sample_size = COALESCE(?, actual_sample_size),
+          actual_sample_unit = COALESCE(?, actual_sample_unit),
+          retest_date = COALESCE(?, retest_date),
+          sampled_containers = COALESCE(?, sampled_containers),
+          sampling_date_time = COALESCE(?, sampling_date_time),
+          updated_at = datetime('now')
+        WHERE id = ?`,
+        [
+          paramsJson,
+          b.staffNotes !== undefined ? b.staffNotes : null,
+          b.staffDecision || null,
+          b.actualSampleSize !== undefined && b.actualSampleSize !== null && !isNaN(Number(b.actualSampleSize)) ? Number(b.actualSampleSize) : null,
+          b.actualSampleUnit || null,
+          b.retestDate || null,
+          b.sampledContainers || null,
+          b.samplingDateTime || null,
+          finalId,
+        ]
+      );
+    } else {
+      await executeD1Query(
+        `INSERT INTO qc_inspection_reports (
+          id, grn_id, grn_number, lot_internal_number, report_number, material_code, material_name,
+          material_type, status, parameters_json, staff_notes, staff_decision,
+          actual_sample_size, actual_sample_unit, retest_date, sampled_containers,
+          sampling_date_time, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [
+          finalId,
+          b.grnId || null,
+          grnNumber || 'UNKNOWN',
+          lotNumber || 'UNKNOWN',
+          lotNumber || 'UNKNOWN',
+          b.materialCode || 'UNKNOWN',
+          b.materialName || 'UNKNOWN',
+          b.materialType || 'raw',
+          'QUALITY_CONTROL_PROCESS',
+          paramsJson,
+          b.staffNotes || null,
+          b.staffDecision || 'RELEASE',
+          b.actualSampleSize !== undefined && b.actualSampleSize !== null && !isNaN(Number(b.actualSampleSize)) ? Number(b.actualSampleSize) : null,
+          b.actualSampleUnit || 'gram',
+          b.retestDate || null,
+          b.sampledContainers || null,
+          b.samplingDateTime || null,
+        ]
+      );
+    }
+
+    res.json({ success: true, id: finalId, savedAt: new Date().toISOString() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

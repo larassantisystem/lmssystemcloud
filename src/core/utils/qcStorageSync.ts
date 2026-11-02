@@ -49,7 +49,7 @@ export function packGrnNotes(userNotes?: string | null, qcReport?: Partial<QcIns
     lotInternalNumber: normalizedLot,
     reportNumber: normalizedLot,
     status: qcReport.status || 'QUARANTINE',
-    parameters: qcReport.parameters?.filter(p => p.parameterName !== 'pH'),
+    parameters: qcReport.parameters,
     staffDecision: qcReport.staffDecision,
     staffNotes: qcReport.staffNotes,
     staffSignature: qcReport.staffSignature,
@@ -102,22 +102,49 @@ export function unpackGrnNotes(rawNotes?: string | null): { userNotes: string; q
  * Syncs a QC report directly to Supabase warehouse_grn row.
  * Updates qc_status, internal_lot_number, and packs the QC report payload into notes.
  */
+/**
+ * Syncs a QC report directly to Cloudflare D1 / SQLite qc_inspection_reports table.
+ */
+export async function syncQcReportToD1(report: QcInspectionReport): Promise<boolean> {
+  try {
+    const res = await fetch('/api/qc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(report),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      console.warn('[syncQcReportToD1] Failed to sync report to /api/qc:', errData);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[syncQcReportToD1] Network exception syncing report:', e);
+    return false;
+  }
+}
+
+/**
+ * Syncs a QC report directly to Supabase warehouse_grn row and Cloudflare D1.
+ * Updates qc_status, internal_lot_number, and packs the QC report payload into notes.
+ */
 export async function syncQcReportToSupabase(
   report: QcInspectionReport,
   existingUserNotes?: string | null
 ): Promise<boolean> {
-  if (!isSupabaseConfigured || !supabase) {
-    return false;
-  }
+  // Always synchronize to D1 physical table first
+  syncQcReportToD1(report).catch((e) => console.warn('[syncQcReportToD1] Async D1 error:', e));
 
-  const isUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+  if (!isSupabaseConfigured || !supabase) {
+    return true;
+  }
 
   try {
     // 1. Fetch current remote row to avoid overwriting concurrent edits
     let remoteRow: any = null;
     let fetchErr: any = null;
 
-    if (report.grnId && isUuid(report.grnId)) {
+    if (report.grnId) {
       const res = await supabase
         .from('warehouse_grn')
         .select('id, grn_number, notes, internal_lot_number')
@@ -140,14 +167,12 @@ export async function syncQcReportToSupabase(
     if (!remoteRow && report.grnId) {
       // Try stripping qc-rep- prefix
       const cleanId = report.grnId.replace(/^qc-rep-/, '');
-      if (isUuid(cleanId)) {
-        const res = await supabase
-          .from('warehouse_grn')
-          .select('id, grn_number, notes, internal_lot_number')
-          .eq('id', cleanId)
-          .maybeSingle();
-        remoteRow = res.data;
-      }
+      const res = await supabase
+        .from('warehouse_grn')
+        .select('id, grn_number, notes, internal_lot_number')
+        .eq('id', cleanId)
+        .maybeSingle();
+      remoteRow = res.data;
     }
 
     const currentNotes = remoteRow?.notes || existingUserNotes || '';
@@ -194,9 +219,9 @@ export async function syncQcReportToSupabase(
       updatePayload.retest_date = effectiveRetest;
     }
 
-    const targetId = remoteRow?.id;
+    const targetId = remoteRow?.id || report.grnId;
     const runUpdate = async (payloadToSync: Record<string, any>) => {
-      if (targetId && isUuid(targetId)) {
+      if (targetId) {
         return await supabase.from('warehouse_grn').update(payloadToSync).eq('id', targetId);
       } else if (report.grnNumber) {
         return await supabase.from('warehouse_grn').update(payloadToSync).eq('grn_number', report.grnNumber);
