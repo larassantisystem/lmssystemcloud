@@ -362,6 +362,93 @@ if (fs.existsSync(schemaPath)) {
       console.warn('[Cloudflare D1 Engine] Lot LBB2610050 registration notice:', e);
     }
 
+    // Ensure B0345 raw material and GRN-BB-261024-02 exist with exact master parameters (pH 4,00 - 4,40)
+    try {
+      const b345Params = [
+        { name: 'Bentuk', specification: 'Liquid' },
+        { name: 'Warna', specification: 'Clear To Slightly Hazy Liquid' },
+        { name: 'Bau', specification: 'Odourless' },
+        { name: 'pH', specification: '4,00 - 4,40' },
+        { name: 'Density', specification: '1.3300 - 1,3500' },
+        { name: 'Solubility', specification: 'Larut Dalam Air' }
+      ];
+      const b345ParamsJson = JSON.stringify(b345Params);
+
+      db.prepare(`
+        INSERT INTO raw_materials (
+          id, code, name, category, storage_conditions, manufacturer, qc_parameters, qc_parameters_json, reorder_point
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET
+          qc_parameters = excluded.qc_parameters,
+          qc_parameters_json = excluded.qc_parameters_json
+      `).run(
+        'raw-b0345', 'B0345', 'GC 850 Aluminium Chlorohidrate',
+        'active', 'Simpan pada suhu ruang terlindung dari cahaya', 'General Chemical',
+        b345ParamsJson, b345ParamsJson, 50.0
+      );
+
+      const checkGrn345 = db.prepare('SELECT id FROM warehouse_grn WHERE grn_number = ? LIMIT 1').get('GRN-BB-261024-02') as any;
+      const b345Payload = {
+        lotInternalNumber: 'LBB2610046',
+        reportNumber: 'LBB2610046',
+        status: 'QUALITY_CONTROL_PROCESS',
+        parameters: b345Params.map((p, idx) => ({
+          id: `param-b345-${idx}`,
+          parameterName: p.name,
+          specification: p.specification,
+          resultValue: '',
+          isCompliant: true,
+          notes: ''
+        }))
+      };
+      const b345Notes = `<!--QC_PAYLOAD_START-->${JSON.stringify(b345Payload)}<!--QC_PAYLOAD_END-->`;
+
+      if (!checkGrn345) {
+        db.prepare(`
+          INSERT INTO warehouse_grn (
+            id, grn_number, material_type, material_code, material_name,
+            manufacturer, distributor, delivery_note_number, purchase_order_number, po_number,
+            supplier_batch_number, batch_number, internal_lot_number, received_date,
+            expiration_date, retest_date, quantity_received, current_quantity, unit, container_count,
+            container_type, storage_location, qc_status, received_by, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          'id-1793594530578-lug6wt0', 'GRN-BB-261024-02', 'raw', 'B0345', 'GC 850 Aluminium Chlorohidrate',
+          'General Chemical', 'PT. Kimia Raya', 'SJ-GC-2026-024', 'PO-2026-1024-02', 'PO-2026-1024-02',
+          'GC8502026', 'GC8502026', 'LBB2610046', '2026-10-24',
+          '2031-03-20', '2031-03-20', 100.0, 100.0, 'kg', 4,
+          'Drum', 'Gudang Karantina', 'QUALITY_CONTROL_PROCESS', 'Heni (Staf Gudang)',
+          b345Notes
+        );
+      } else {
+        db.prepare('UPDATE warehouse_grn SET notes = ? WHERE grn_number = ?').run(b345Notes, 'GRN-BB-261024-02');
+      }
+
+      const checkQc345 = db.prepare('SELECT id FROM qc_inspection_reports WHERE grn_number = ? LIMIT 1').get('GRN-BB-261024-02') as any;
+      if (!checkQc345) {
+        db.prepare(`
+          INSERT INTO qc_inspection_reports (
+            id, grn_id, grn_number, report_number, lot_internal_number,
+            material_code, material_name, material_type, batch_number,
+            quantity_received, unit, container_count, container_type,
+            manufacturer, distributor, received_date, expiry_date, retest_date,
+            storage_conditions, status, parameters_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        `).run(
+          'qc-rep-grn-b0345', 'id-1793594530578-lug6wt0', 'GRN-BB-261024-02', 'LBB2610046', 'LBB2610046',
+          'B0345', 'GC 850 Aluminium Chlorohidrate', 'raw', 'GC8502026',
+          100.0, 'kg', 4, 'Drum',
+          'General Chemical', 'PT. Kimia Raya', '2026-10-24', '2031-03-20', '2031-03-20',
+          'Simpan pada suhu ruang terlindung dari cahaya', 'QUALITY_CONTROL_PROCESS', JSON.stringify(b345Payload.parameters)
+        );
+      } else {
+        db.prepare('UPDATE qc_inspection_reports SET parameters_json = ? WHERE grn_number = ?').run(JSON.stringify(b345Payload.parameters), 'GRN-BB-261024-02');
+      }
+      console.log('[Cloudflare D1 Engine] Successfully synchronized B0345 and GRN-BB-261024-02 with master parameters.');
+    } catch (e) {
+      console.warn('[Cloudflare D1 Engine] B0345 registration notice:', e);
+    }
+
     // Seed initial users into Cloudflare D1 if empty
     const checkProfiles = db.prepare('SELECT COUNT(*) as count FROM profiles').get() as any;
     if (!checkProfiles || checkProfiles.count === 0) {
@@ -858,6 +945,136 @@ async function autoMigrateDatabase() {
     await executeD1Query("UPDATE products SET product_code = code WHERE (product_code IS NULL OR product_code = '') AND code IS NOT NULL;");
     await executeD1Query("UPDATE products SET code = product_code WHERE (code IS NULL OR code = '') AND product_code IS NOT NULL;");
   } catch (e) {}
+
+  // Global Master Parameter Synchronization for All GRN & QC Inspection Reports (both Remote D1 and Local SQLite)
+  try {
+    const rawRes = await executeD1Query('SELECT code, name, qc_parameters FROM raw_materials');
+    const rawMats = rawRes.results || [];
+    const packRes = await executeD1Query('SELECT code, name, qc_parameters FROM packaging_materials');
+    const packMats = packRes.results || [];
+    
+    const masterMap = new Map<string, any[]>();
+    rawMats.forEach((m: any) => {
+      let params = [];
+      try { params = typeof m.qc_parameters === 'string' ? JSON.parse(m.qc_parameters || '[]') : (m.qc_parameters || []); } catch {}
+      if (params.length > 0) {
+        masterMap.set((m.code || '').trim().toLowerCase(), params);
+        masterMap.set((m.name || '').trim().toLowerCase(), params);
+      }
+    });
+    packMats.forEach((m: any) => {
+      let params = [];
+      try { params = typeof m.qc_parameters === 'string' ? JSON.parse(m.qc_parameters || '[]') : (m.qc_parameters || []); } catch {}
+      if (params.length > 0) {
+        masterMap.set((m.code || '').trim().toLowerCase(), params);
+        masterMap.set((m.name || '').trim().toLowerCase(), params);
+      }
+    });
+
+    const grnRes = await executeD1Query('SELECT id, material_code, material_name, notes, qc_status FROM warehouse_grn');
+    const grnRows = grnRes.results || [];
+
+    for (const g of grnRows) {
+      const codeKey = (g.material_code || '').trim().toLowerCase();
+      const nameKey = (g.material_name || '').trim().toLowerCase();
+      const masterParams = masterMap.get(codeKey) || masterMap.get(nameKey);
+
+      if (masterParams && masterParams.length > 0 && g.notes && g.notes.includes('<!--QC_PAYLOAD_START-->')) {
+        try {
+          const match = g.notes.match(/<!--QC_PAYLOAD_START-->([\s\S]*?)<!--QC_PAYLOAD_END-->/);
+          if (match && match[1]) {
+            const payload = JSON.parse(match[1]);
+            if (payload && Array.isArray(payload.parameters)) {
+              const currentParams = payload.parameters;
+              const isDone = ['PASSED', 'PASSED_WITH_DEVIATION', 'REJECTED'].includes(payload.status);
+              if (!isDone) {
+                let changed = false;
+                const updatedParams = masterParams.map((mp: any, idx: number) => {
+                  const matchedP = currentParams.find((p: any) => {
+                    const pName = (p.parameterName || '').trim().toLowerCase();
+                    const tName = (mp.name || mp.parameterName || '').trim().toLowerCase();
+                    return pName === tName || ((tName === 'ph' || tName.startsWith('ph ')) && (pName === 'ph' || pName.startsWith('ph ')));
+                  });
+                  const targetSpec = (mp.specification || mp.acceptanceCondition || 'Sesuai Standar').trim();
+                  if (!matchedP) {
+                    changed = true;
+                  } else if ((matchedP.specification || '').trim() !== targetSpec) {
+                    changed = true;
+                  }
+                  return {
+                    id: matchedP?.id || `param-sync-${idx}`,
+                    parameterName: mp.name || mp.parameterName,
+                    specification: targetSpec,
+                    resultValue: matchedP?.resultValue || '',
+                    isCompliant: matchedP?.isCompliant ?? true,
+                    notes: matchedP?.notes || '',
+                  };
+                });
+
+                if (changed || updatedParams.length !== currentParams.length) {
+                  payload.parameters = updatedParams;
+                  const newNotes = g.notes.replace(
+                    /<!--QC_PAYLOAD_START-->[\s\S]*?<!--QC_PAYLOAD_END-->/,
+                    `<!--QC_PAYLOAD_START-->${JSON.stringify(payload)}<!--QC_PAYLOAD_END-->`
+                  );
+                  await executeD1Query('UPDATE warehouse_grn SET notes = ? WHERE id = ?', [newNotes, g.id]);
+                  try { db.prepare('UPDATE warehouse_grn SET notes = ? WHERE id = ?').run(newNotes, g.id); } catch {}
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    const qcRes = await executeD1Query('SELECT id, material_code, material_name, parameters_json, status FROM qc_inspection_reports');
+    const qcRows = qcRes.results || [];
+
+    for (const q of qcRows) {
+      const codeKey = (q.material_code || '').trim().toLowerCase();
+      const nameKey = (q.material_name || '').trim().toLowerCase();
+      const masterParams = masterMap.get(codeKey) || masterMap.get(nameKey);
+
+      if (masterParams && masterParams.length > 0) {
+        try {
+          const currentParams = JSON.parse(q.parameters_json || '[]');
+          const isDone = ['PASSED', 'PASSED_WITH_DEVIATION', 'REJECTED'].includes(q.status);
+          if (!isDone) {
+            let changed = false;
+            const updatedParams = masterParams.map((mp: any, idx: number) => {
+              const matchedP = currentParams.find((p: any) => {
+                const pName = (p.parameterName || '').trim().toLowerCase();
+                const tName = (mp.name || mp.parameterName || '').trim().toLowerCase();
+                return pName === tName || ((tName === 'ph' || tName.startsWith('ph ')) && (pName === 'ph' || pName.startsWith('ph ')));
+              });
+              const targetSpec = (mp.specification || mp.acceptanceCondition || 'Sesuai Standar').trim();
+              if (!matchedP) {
+                changed = true;
+              } else if ((matchedP.specification || '').trim() !== targetSpec) {
+                changed = true;
+              }
+              return {
+                id: matchedP?.id || `param-sync-${idx}`,
+                parameterName: mp.name || mp.parameterName,
+                specification: targetSpec,
+                resultValue: matchedP?.resultValue || '',
+                isCompliant: matchedP?.isCompliant ?? true,
+                notes: matchedP?.notes || '',
+              };
+            });
+
+            if (changed || updatedParams.length !== currentParams.length) {
+              await executeD1Query('UPDATE qc_inspection_reports SET parameters_json = ? WHERE id = ?', [JSON.stringify(updatedParams), q.id]);
+              try { db.prepare('UPDATE qc_inspection_reports SET parameters_json = ? WHERE id = ?').run(JSON.stringify(updatedParams), q.id); } catch {}
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    console.log('[D1 Migration] Global Master Parameter Synchronization completed successfully for all material codes across D1.');
+  } catch (err) {
+    console.warn('[D1 Migration] Global Master Parameter Sync notice:', err);
+  }
 
   console.log('[D1 Migration] Schema verification completed successfully.');
 }
@@ -2554,7 +2771,40 @@ app.post('/api/qc/draft', async (req: Request, res: Response) => {
 
     const existing = results[0];
     const finalId = existing?.id || targetId || `qc-rep-${Date.now()}`;
-    const paramsJson = typeof b.parameters === 'string' ? b.parameters : JSON.stringify(b.parameters || []);
+    let incomingParams = Array.isArray(b.parameters) ? b.parameters : (typeof b.parameters === 'string' ? JSON.parse(b.parameters || '[]') : []);
+
+    // Check if report is authorized by QM
+    const isAuthorized = existing && (['PASSED', 'PASSED_WITH_DEVIATION', 'REJECTED'].includes(existing.status) || Boolean(existing.qm_decision));
+    if (!isAuthorized) {
+      // Look up master parameters to guarantee specifications stay in sync with master
+      const matCode = b.materialCode || b.material_code || existing?.material_code;
+      const matName = b.materialName || b.material_name || existing?.material_name;
+      if (matCode || matName) {
+        try {
+          const { results: matRows } = await executeD1Query(
+            'SELECT qc_parameters FROM raw_materials WHERE code = ? COLLATE NOCASE OR name = ? COLLATE NOCASE UNION ALL SELECT qc_parameters FROM packaging_materials WHERE code = ? COLLATE NOCASE OR name = ? COLLATE NOCASE LIMIT 1',
+            [matCode || '', matName || '', matCode || '', matName || '']
+          );
+          if (matRows && matRows[0]?.qc_parameters) {
+            const masterList = JSON.parse(matRows[0].qc_parameters);
+            if (Array.isArray(masterList) && masterList.length > 0) {
+              incomingParams = incomingParams.map((p: any) => {
+                const pName = (p.parameterName || '').trim().toLowerCase();
+                const matched = masterList.find((mp: any) => {
+                  const mName = (mp.name || mp.parameterName || '').trim().toLowerCase();
+                  return pName === mName || ((mName === 'ph' || mName.startsWith('ph ')) && (pName === 'ph' || pName.startsWith('ph ')));
+                });
+                if (matched && matched.specification) {
+                  return { ...p, specification: matched.specification };
+                }
+                return p;
+              });
+            }
+          }
+        } catch {}
+      }
+    }
+    const paramsJson = JSON.stringify(incomingParams);
 
     if (existing) {
       await executeD1Query(

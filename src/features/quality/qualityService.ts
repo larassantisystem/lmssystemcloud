@@ -58,7 +58,24 @@ export const qualityService = {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            memoryReports = parsed;
+            memoryReports = parsed.map((r: any) => {
+              const isDone = ['PASSED', 'PASSED_WITH_DEVIATION', 'REJECTED'].includes(r.status) || Boolean(r.qmSignature);
+              if (!isDone && (r.materialCode === 'B0345' || (r.materialName || '').toLowerCase().includes('aluminium chlorohidrate'))) {
+                if (Array.isArray(r.parameters)) {
+                  r.parameters = r.parameters.map((p: any) => {
+                    const pName = (p.parameterName || '').trim().toLowerCase();
+                    if (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')) {
+                      return { ...p, parameterName: 'pH', specification: '4,00 - 4,40' };
+                    }
+                    if (pName === 'density') {
+                      return { ...p, parameterName: 'Density', specification: '1.3300 - 1,3500' };
+                    }
+                    return p;
+                  });
+                }
+              }
+              return r;
+            });
           }
         }
       } catch {}
@@ -613,6 +630,12 @@ export const qualityService = {
             needsUpdate = true;
           }
           if (grn.qcPayload.parameters && Array.isArray(grn.qcPayload.parameters) && grn.qcPayload.parameters.length > 0) {
+            const isAuthorizedByQm = [
+              'PASSED',
+              'PASSED_WITH_DEVIATION',
+              'REJECTED',
+            ].includes(existingReport.status) || Boolean(existingReport.qmSignature);
+
             existingReport.parameters = grn.qcPayload.parameters.map((remoteP: any) => {
               const localP = existingReport.parameters?.find((lp) => {
                 const lpName = (lp.parameterName || '').trim().toLowerCase();
@@ -628,8 +651,23 @@ export const qualityService = {
               const localVal = localP && typeof localP.resultValue === 'string' ? localP.resultValue.trim() : '';
               const finalVal = remoteVal !== '' ? remoteP.resultValue : (localVal !== '' ? localP?.resultValue : '');
 
+              let finalSpec = remoteP.specification;
+              if (!isAuthorizedByQm && effectiveParamTemplates.length > 0) {
+                const matchedTemplate = effectiveParamTemplates.find((t) => {
+                  const tName = t.name.trim().toLowerCase();
+                  const rpName = (remoteP.parameterName || '').trim().toLowerCase();
+                  return tName === rpName ||
+                    ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                     (rpName === 'ph' || rpName.startsWith('ph ') || rpName.startsWith('ph(')));
+                });
+                if (matchedTemplate) {
+                  finalSpec = matchedTemplate.spec;
+                }
+              }
+
               return {
                 ...remoteP,
+                specification: finalSpec,
                 resultValue: finalVal,
                 isCompliant: remoteP.isCompliant !== undefined ? remoteP.isCompliant : (localP?.isCompliant ?? true),
               };
@@ -767,23 +805,16 @@ export const qualityService = {
         }
 
         // Live Synchronization with Master Bahan Kemas / Bahan Baku (Bagian B)
-        // If the report is in QUARANTINE or QUALITY_CONTROL_PROCESS with NO entered test results yet, ensure criteria from Master Data are synced.
-        // NEVER overwrite reports in AWAITING_QM_AUTHORIZATION, PASSED, PASSED_WITH_DEVIATION, REJECTED, or reports that already have staff test results.
-        const isAwaitingOrDone = [
-          'AWAITING_QM_AUTHORIZATION',
+        // ONLY freeze parameters AFTER Quality Manager authorization (PASSED, PASSED_WITH_DEVIATION, REJECTED, or qmSignature).
+        // Before QM authorization, parameters & specifications ALWAYS follow the latest master data while keeping entered results.
+        const isAuthorizedByQm = [
           'PASSED',
           'PASSED_WITH_DEVIATION',
           'REJECTED',
-        ].includes(existingReport.status) || Boolean(existingReport.staffSignature) || Boolean(existingReport.staffDecision);
-
-        const hasEnteredResults = (existingReport.parameters || []).some(
-          (p) => typeof p.resultValue === 'string' && p.resultValue.trim() !== ''
-        );
+        ].includes(existingReport.status) || Boolean(existingReport.qmSignature);
 
         const shouldSyncMasterParams =
-          !isAwaitingOrDone &&
-          !hasEnteredResults &&
-          (['QUARANTINE', 'QUALITY_CONTROL_PROCESS'].includes(existingReport.status) || !existingReport.parameters || existingReport.parameters.length === 0) &&
+          !isAuthorizedByQm &&
           effectiveParamTemplates.length > 0;
 
         if (shouldSyncMasterParams) {
@@ -796,8 +827,17 @@ export const qualityService = {
             const cp = currentParams.find((p) => (p.parameterName || '').trim().toLowerCase() === ep.name.trim().toLowerCase());
             return !cp || !cp.specification || cp.specification === '-' || cp.specification.trim() !== ep.spec.trim();
           });
+          const isMissingAnyMasterParam = effectiveParamTemplates.some((ep) => {
+            return !currentParams.some((p) => {
+              const pName = (p.parameterName || '').trim().toLowerCase();
+              const tName = ep.name.trim().toLowerCase();
+              return pName === tName ||
+                ((tName === 'ph' || tName.startsWith('ph ') || tName.startsWith('ph(')) &&
+                 (pName === 'ph' || pName.startsWith('ph ') || pName.startsWith('ph(')));
+            });
+          });
 
-          if (isParameterCountMismatch || isNameMismatch || isSpecMismatch || currentParams.length === 0) {
+          if (isParameterCountMismatch || isNameMismatch || isSpecMismatch || isMissingAnyMasterParam || currentParams.length === 0) {
             existingReport.parameters = effectiveParamTemplates.map((item, idx) => {
               const matchedP = currentParams.find((p) => {
                 const pName = (p.parameterName || '').trim().toLowerCase();
@@ -839,6 +879,9 @@ export const qualityService = {
 
         if (needsUpdate) {
           isModified = true;
+          syncQcReportToD1(existingReport).catch((e) => {
+            console.warn('[qualityService] Failed to persist synchronized master params to D1:', e);
+          });
         }
       }
     });
