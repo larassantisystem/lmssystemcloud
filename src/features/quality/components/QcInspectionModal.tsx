@@ -45,6 +45,7 @@ interface QcInspectionModalProps {
     sampledContainers?: string,
     samplingDateTime?: string
   ) => Promise<void>;
+  onRevertRelease?: (report: QcInspectionReport) => void;
 }
 
 export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
@@ -52,6 +53,7 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
   onClose,
   report,
   onSubmitStaffAnalysis,
+  onRevertRelease,
 }) => {
   const { user } = useAuth();
 
@@ -521,21 +523,10 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
     });
   };
 
-  const handleRevertRelease = async () => {
-    if (!report || !onSubmitStaffAnalysis) return;
-    
-    // Konfirmasi pembatalan rilis
-    if (!window.confirm('Apakah Anda yakin ingin membatalkan rilis (Revert Release) laporan ini? Status akan kembali ke "In Progress" untuk pengeditan.')) {
-      return;
-    }
-
-    try {
-      // Panggil fungsi untuk update status di backend (asumsi onSubmitStaffAnalysis bisa handle status lain atau tambah method baru)
-      // Untuk sementara, kita panggil fungsi yang ada dengan modifikasi staffDecision menjadi 'REJECT' (atau sesuaikan dengan backend Anda)
-      // CATATAN: Implementasi backend untuk 'REVERT' mungkin perlu ditambah di service terkait.
-      alert('Fitur Pembatalan Rilis sedang dalam tahap pengembangan di sisi Backend/Service.');
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Gagal membatalkan rilis');
+  const handleRevertRelease = () => {
+    if (!report) return;
+    if (onRevertRelease) {
+      onRevertRelease(report);
     }
   };
 
@@ -1161,7 +1152,7 @@ export const QcInspectionModal: React.FC<QcInspectionModalProps> = ({
 
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-3">
-              {report.status === 'PASSED' && (
+              {(report.status === 'PASSED' || report.status === 'PASSED_WITH_DEVIATION') && (
                 <button
                   type="button"
                   onClick={handleRevertRelease}

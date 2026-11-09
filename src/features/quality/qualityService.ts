@@ -998,22 +998,28 @@ export const qualityService = {
   /**
    * Revert report back to warehouse with mandatory reason & password verification
    */
-  revertToWarehouse: async (
+  /**
+   * Cancel / Revert an inspection report, with selectable destination:
+   * - 'warehouse': Revert back to warehouse (status 'REVERTED_TO_WAREHOUSE') so warehouse can correct GRN data.
+   * - 'analyst': Revert back to QC Lab testing (status 'QUALITY_CONTROL_PROCESS') so lab analyst can re-test / edit parameters.
+   */
+  cancelRelease: async (
     reportId: string,
+    destination: 'warehouse' | 'analyst',
     reason: string,
     user: UserProfile,
     passwordInput: string
   ): Promise<QcInspectionReport> => {
     if (!passwordInput) {
-      throw new Error('Kata sandi otorisasi revert wajib diisi.');
+      throw new Error('Kata sandi otorisasi wajib diisi.');
     }
     const verifyRes = await authService.verifyPassword(user.nik, passwordInput);
     if (!verifyRes.valid) {
-      throw new Error(verifyRes.error || 'Kata sandi tidak valid. Otorisasi revert ke gudang ditolak.');
+      throw new Error(verifyRes.error || 'Kata sandi tidak valid. Otorisasi pembatalan / revert ditolak.');
     }
 
     if (!reason || reason.trim().length < 5) {
-      throw new Error('Alasan revert wajib diisi dengan jelas (minimal 5 karakter).');
+      throw new Error('Alasan pembatalan / revert wajib diisi dengan jelas (minimal 5 karakter).');
     }
 
     let reports = await qualityService.getReports();
@@ -1028,39 +1034,100 @@ export const qualityService = {
     }
     if (!report) throw new Error('Laporan QC tidak ditemukan');
 
-    report.status = 'REVERTED_TO_WAREHOUSE';
-    report.revertReason = reason.trim();
-    report.revertedBy = `${user.name} (${user.role.toUpperCase()})`;
-    report.revertedAt = new Date().toISOString();
-    report.updatedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    const isFromRelease = report.status === 'PASSED' || report.status === 'PASSED_WITH_DEVIATION';
 
-    // Sync to warehouse
-    await qualityService.syncGrnStatus(report.grnId, 'REVERTED_TO_WAREHOUSE', {
-      notes: reason.trim(),
-      revertReason: reason.trim(),
-      revertedBy: `${user.name} (${user.role.toUpperCase()})`,
-      revertedAt: report.revertedAt,
-    });
+    // Clear QM release authorization because release is cancelled / reverted
+    report.qmSignature = undefined;
+    report.qmDecision = undefined;
+    report.qmDeviationNumber = undefined;
+    report.qmNotes = undefined;
+
+    if (destination === 'warehouse') {
+      report.status = 'REVERTED_TO_WAREHOUSE';
+      report.revertReason = reason.trim();
+      report.revertedBy = `${user.name} (${user.role.toUpperCase()})`;
+      report.revertedAt = now;
+      report.updatedAt = now;
+
+      // Sync to warehouse
+      await qualityService.syncGrnStatus(report.grnId, 'REVERTED_TO_WAREHOUSE', {
+        notes: isFromRelease
+          ? `Pembatalan Rilis ke Gudang oleh ${user.name}: "${reason.trim()}"`
+          : reason.trim(),
+        revertReason: reason.trim(),
+        revertedBy: `${user.name} (${user.role.toUpperCase()})`,
+        revertedAt: report.revertedAt,
+      });
+
+      // Broadcast warning notification to Warehouse & Quality
+      await qualityService.createNotification({
+        title: isFromRelease ? 'Rilis Dibatalkan (Dikembalikan ke Gudang)' : 'Penerimaan Direvert oleh QC',
+        message: `Bahan ${report.materialName} (${report.grnNumber}) ${isFromRelease ? 'dibatalkan rilisnya dan ' : ''}dikembalikan ke Gudang oleh ${user.name}. Alasan: "${reason.trim()}". Gudang dapat melakukan koreksi data.`,
+        type: 'WARNING',
+        targetDepartments: ['warehouse', 'quality'],
+        targetRoles: ['staff', 'supervisor', 'manager'],
+        reportId: report.id,
+        grnNumber: report.grnNumber,
+      });
+    } else {
+      // destination === 'analyst' (Ke Analisa)
+      report.status = 'QUALITY_CONTROL_PROCESS';
+      report.qmRevertToLabReason = reason.trim();
+      report.qmRevertToLabBy = `${user.name} (${user.role.toUpperCase()})`;
+      report.qmRevertToLabAt = now;
+      report.updatedAt = now;
+
+      // Reset staff decision so analyst can re-analyze, re-evaluate parameters, and re-submit
+      report.staffDecision = undefined;
+      report.staffSignature = undefined;
+
+      // Sync to warehouse
+      await qualityService.syncGrnStatus(report.grnId, 'QUALITY_CONTROL_PROCESS', {
+        notes: isFromRelease
+          ? `Pembatalan Rilis ke Analisa Lab QC oleh ${user.name}: "${reason.trim()}"`
+          : `Dikembalikan ke Proses Analisa Lab oleh ${user.name}: "${reason.trim()}"`,
+      });
+
+      // Broadcast notification to Quality Department
+      await qualityService.createNotification({
+        title: isFromRelease ? 'Rilis Dibatalkan (Dikembalikan ke Uji Lab)' : 'Dikembalikan ke Proses Analisa Lab',
+        message: `Bahan ${report.materialName} (${report.grnNumber}) ${isFromRelease ? 'dibatalkan rilisnya dan ' : ''}dikembalikan ke meja Analis QC oleh ${user.name} untuk pengujian/koreksi hasil analisa. Catatan: "${reason.trim()}".`,
+        type: 'WARNING',
+        targetDepartments: ['quality'],
+        targetRoles: ['staff', 'supervisor', 'admin', 'manager'],
+        reportId: report.id,
+        lotInternalNumber: report.lotInternalNumber,
+        grnNumber: report.grnNumber,
+      });
+    }
+
     await syncQcReportToSupabase(report);
+
+    // Invalidate stock cache so warehouse inventory instantly updates and doesn't treat lot as released
+    import('../warehouse/stockService')
+      .then(({ stockService }) => stockService.invalidateStockCache())
+      .catch(() => {});
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('qc_reports_updated', { detail: { id: report.id, report } }));
     }
 
-    // Broadcast warning notification to Warehouse & Quality
-    await qualityService.createNotification({
-      title: 'Penerimaan Direvert oleh QC',
-      message: `Bahan ${report.materialName} (${report.grnNumber}) dikembalikan ke Gudang oleh ${user.name}. Alasan: "${reason.trim()}". Gudang dapat melakukan koreksi data.`,
-      type: 'WARNING',
-      targetDepartments: ['warehouse', 'quality'],
-      targetRoles: ['staff', 'supervisor', 'manager'],
-      reportId: report.id,
-      grnNumber: report.grnNumber,
-    });
-
     soundService.play('revert');
 
     return report;
+  },
+
+  /**
+   * Revert report back to warehouse with mandatory reason & password verification (alias of cancelRelease to 'warehouse')
+   */
+  revertToWarehouse: async (
+    reportId: string,
+    reason: string,
+    user: UserProfile,
+    passwordInput: string
+  ): Promise<QcInspectionReport> => {
+    return qualityService.cancelRelease(reportId, 'warehouse', reason, user, passwordInput);
   },
 
   /**

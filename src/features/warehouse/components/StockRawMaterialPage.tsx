@@ -16,9 +16,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   TrendingDown,
+  FileSpreadsheet,
+  FileText,
 } from 'lucide-react';
 import { MaterialStockSummary } from '../types/stockTypes';
 import { stockService } from '../stockService';
+import { exportStockToExcel, exportStockToPDF } from '../../../utils/exportUtils';
 import { LotDetailModal } from './LotDetailModal';
 import { StockDeductionModal } from './StockDeductionModal';
 import { StockOpnameModal } from './StockOpnameModal';
@@ -181,6 +184,30 @@ export const StockRawMaterialPage: React.FC<StockRawMaterialPageProps> = ({
               className="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-500 transition-colors cursor-pointer"
             >
               <RefreshCw className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const all = await stockService.getStockSummaries('raw');
+                exportStockToExcel(all, 'Saldo_Stok_Bahan_Baku');
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Export Excel</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const all = await stockService.getStockSummaries('raw');
+                exportStockToPDF(all, 'Laporan Saldo Stok Bahan Baku (Raw Material)');
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Export PDF</span>
             </button>
           </div>
 

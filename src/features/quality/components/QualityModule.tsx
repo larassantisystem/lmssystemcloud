@@ -419,10 +419,18 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
     setPdfReport(updated);
   };
 
-  const handleConfirmRevert = async (reportId: string, reason: string, passwordInput: string) => {
+  const handleConfirmRevert = async (
+    reportId: string,
+    destination: 'warehouse' | 'analyst',
+    reason: string,
+    passwordInput: string
+  ) => {
     if (!user) return;
-    const updated = await qualityService.revertToWarehouse(reportId, reason, user, passwordInput);
+    const updated = await qualityService.cancelRelease(reportId, destination, reason, user, passwordInput);
     setReports((prev) => prev.map((r) => (r.id === updated.id || r.grnNumber === updated.grnNumber ? updated : r)));
+    if (destination === 'analyst') {
+      setCurrentTab('testing');
+    }
   };
 
   const handleRevertToLab = async (reportId: string, revisionInstruction: string, passwordInput: string) => {
@@ -1064,7 +1072,7 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
                           <FileText className="w-3.5 h-3.5" />
                           Laporan PDF
                         </button>
-                        {item.status === 'PASSED' && (
+                        {(item.status === 'PASSED' || item.status === 'PASSED_WITH_DEVIATION') && (
                           <button
                             onClick={() => setRevertingReport(item)}
                             title="Batalkan Release"
@@ -3431,6 +3439,10 @@ export const QualityModule: React.FC<QualityModuleProps> = ({ subTab = 'queue' }
         onClose={() => setInspectingReport(null)}
         report={inspectingReport}
         onSubmitStaffAnalysis={handleSubmitStaffAnalysis}
+        onRevertRelease={(rep) => {
+          setInspectingReport(null);
+          setRevertingReport(rep);
+        }}
       />
 
       <QcManagerAuthModal

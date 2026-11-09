@@ -129,7 +129,7 @@ export const materialService = {
       try {
         let query = supabase
           .from('raw_materials')
-          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions');
+          .select('id, code, spec_number, name, chemical_name, category, categories, other_category_specification, manufacturer, storage_conditions', { count: 'exact' });
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -140,14 +140,13 @@ export const materialService = {
           query = query.or(`category.eq.${params.category},categories.ilike.%${params.category}%`);
         }
 
-        query = query.order('code', { ascending: true }).range(from, queryTo);
+        query = query.order('code', { ascending: true }).range(from, to);
 
-        const { data, error } = await query;
+        const { data, count, error } = await query;
+        const totalCount = typeof count === 'number' ? count : (data ? data.length : 0);
 
         if (!error && data) {
-          const hasMore = data.length > pageSize;
-          const rawItems = hasMore ? data.slice(0, pageSize) : data;
-          const mapped: RawMaterial[] = rawItems.map((m: any) => {
+          const mapped: RawMaterial[] = data.map((m: any) => {
             const rawCats = parseJsonArray<string>(m.categories, []);
             const resolvedCategories = rawCats.length > 0 
               ? rawCats 
@@ -176,7 +175,6 @@ export const materialService = {
             };
           });
 
-          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
           const result = {
             items: mapped,
             totalCount,

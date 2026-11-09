@@ -178,7 +178,7 @@ export const packagingService = {
       try {
         let query = supabase
           .from('packaging_materials')
-          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, reorder_point, last_modified_by, last_modified_at');
+          .select('id, code, spec_number, name, type, unit, unit_capacity_grams, supplier, manufacturer, storage_location, storage_conditions, reorder_point, last_modified_by, last_modified_at', { count: 'exact' });
 
         if (params.search && params.search.trim()) {
           const s = params.search.trim();
@@ -189,14 +189,13 @@ export const packagingService = {
           query = query.eq('type', params.type);
         }
 
-        query = query.order('code', { ascending: true }).range(from, queryTo);
+        query = query.order('code', { ascending: true }).range(from, to);
 
-        const { data, error } = await query;
+        const { data, count, error } = await query;
+        const totalCount = typeof count === 'number' ? count : (data ? data.length : 0);
 
         if (!error && data) {
-          const hasMore = data.length > pageSize;
-          const rawItems = hasMore ? data.slice(0, pageSize) : data;
-          const mapped: PackagingMaterial[] = rawItems.map((p: any) => ({
+          const mapped: PackagingMaterial[] = data.map((p: any) => ({
             id: p.id,
             code: p.code,
             specNumber: p.spec_number || p.specNumber || `SP-BK-${p.code}`,
@@ -214,7 +213,6 @@ export const packagingService = {
             lastModifiedAt: p.last_modified_at,
           }));
 
-          const totalCount = hasMore ? (page * pageSize) + 1 : ((page - 1) * pageSize) + mapped.length;
           const result = {
             items: mapped,
             totalCount,
